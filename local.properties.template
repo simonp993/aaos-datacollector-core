@@ -1,0 +1,7 @@
+# Local properties — NOT checked into version control.
+# Copy this file to local.properties and fill in your values.
+#
+# Porsche HMI SDK access (required)
+# Create a PAT at https://github.com/settings/tokens/new?scopes=read:packages
+# Enable SSO for the porscheag organization on the token.
+GH_PKG_TOKEN=

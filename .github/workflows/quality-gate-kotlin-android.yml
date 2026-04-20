@@ -1,0 +1,86 @@
+name: Quality Gate - Kotlin Android
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '**/*.kt'
+      - '**/*.kts'
+      - '**/build.gradle.kts'
+      - 'gradle/**'
+      - '.editorconfig'
+      - '.github/workflows/quality-gate-kotlin-android.yml'
+      - '.github/actions/setup-gradle/**'
+  push:
+    branches: [main]
+    paths:
+      - '**/*.kt'
+      - '**/*.kts'
+      - '**/build.gradle.kts'
+      - 'gradle/**'
+      - '.editorconfig'
+      - '.github/workflows/quality-gate-kotlin-android.yml'
+      - '.github/actions/setup-gradle/**'
+
+concurrency:
+  group: quality-gate-kotlin-android-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  format:
+    name: Format (Spotless)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-gradle
+      - name: Check formatting
+        run: ./gradlew spotlessCheck
+
+  lint:
+    name: Lint (Detekt)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-gradle
+      - name: Run Detekt
+        run: ./gradlew detekt
+
+  build:
+    name: Build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-gradle
+      - name: Assemble debug variant
+        run: ./gradlew assembleMib4MockDebug
+
+  test:
+    name: Test & Coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-gradle
+
+      - name: Run unit tests
+        run: ./gradlew testMib4MockDebugUnitTest
+
+      - name: Verify JaCoCo coverage (80% minimum)
+        run: ./gradlew jacocoTestCoverageVerification
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            **/build/reports/tests/
+            **/build/reports/jacoco/
+          retention-days: 14

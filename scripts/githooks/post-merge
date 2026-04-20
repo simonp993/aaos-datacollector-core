@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# post-merge hook: reminds developer to sync dependencies after pull/merge.
+set -euo pipefail
+
+# Check if gradle files changed in the merge
+if git diff --name-only HEAD@{1} HEAD | grep -qE '(gradle|\.kts|libs\.versions\.toml)'; then
+  echo ""
+  echo "⚠️  Build files changed — consider running: ./gradlew --refresh-dependencies"
+  echo ""
+fi

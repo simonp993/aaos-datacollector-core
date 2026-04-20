@@ -1,0 +1,30 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_size = 4
+indent_style = space
+max_line_length = 120
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+[*.md]
+trim_trailing_whitespace = false
+
+[{*.kt,*.kts}]
+ij_kotlin_imports_layout = android.**,androidx.**,de.porsche.**,com.porsche.**,java.*,kotlin.**,kotlinx.**,*,^
+ij_kotlin_code_style_defaults = KOTLIN_OFFICIAL
+ij_kotlin_allow_trailing_comma = true
+ij_kotlin_allow_trailing_comma_on_call_site = true
+ij_kotlin_indent_before_arrow_on_new_line = false
+ktlint_standard_backing-property-naming = disabled
+
+[{*.yaml,*.yml}]
+indent_size = 2
+
+[*.xml]
+indent_size = 4
+
+[*.json]
+indent_size = 2

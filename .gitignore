@@ -1,0 +1,30 @@
+# Built outputs
+/build/
+*/build/
+
+# Gradle
+.gradle/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IDE
+*.iml
+/.idea/
+
+# Local configuration (machine-specific)
+local.properties
+keystore.properties
+
+# macOS
+.DS_Store
+
+# Native build
+.externalNativeBuild/
+.cxx/
+
+# Android profiling captures
+/captures/
+
+# AOSP platform key source files (only the JKS keystore is needed)
+*.pk8
+*.pem
+.java-version
