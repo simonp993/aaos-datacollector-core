@@ -1,8 +1,8 @@
 package com.porsche.datacollector.di
 
-import com.porsche.sportapps.vehicleplatform.VhalPropertyIds
-import com.porsche.sportapps.vehicleplatform.VhalPropertyService
-import com.porsche.sportapps.vehicleplatform.fake.FakeVhalPropertyService
+import com.porsche.datacollector.vehicleplatform.VhalPropertyIds
+import com.porsche.datacollector.vehicleplatform.VhalPropertyService
+import com.porsche.datacollector.vehicleplatform.fake.FakeVhalPropertyService
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn

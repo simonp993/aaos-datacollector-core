@@ -1,6 +1,6 @@
 package com.porsche.datacollector.telemetry
 
-import com.porsche.sportapps.core.logging.Logger
+import com.porsche.datacollector.core.logging.Logger
 import javax.inject.Inject
 
 class LogTelemetry @Inject constructor(

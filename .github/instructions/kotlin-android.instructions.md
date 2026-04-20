@@ -9,7 +9,7 @@ applyTo: "**/*.kt,**/*.kts,**/build.gradle.kts"
 - Java 21 toolchain (`jvmToolchain(21)`)
 - compileSdk 36, minSdk 33 (Android 13+), targetSdk 35
 - Build flavors: `platform` (mib4, nextgen) × `datasource` (mock, real)
-- Convention plugins: `datacollector.android-app`, `sportapps.android-library`, `sportapps.kotlin-library`
+- Convention plugins: `datacollector.android-app`, `datacollector.android-library`, `datacollector.kotlin-library`
 
 ## Code Style
 

@@ -8,7 +8,7 @@ import android.net.NetworkRequest
 import com.porsche.datacollector.collector.Collector
 import com.porsche.datacollector.telemetry.Telemetry
 import com.porsche.datacollector.telemetry.TelemetryEvent
-import com.porsche.sportapps.core.logging.Logger
+import com.porsche.datacollector.core.logging.Logger
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 

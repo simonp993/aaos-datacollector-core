@@ -26,7 +26,7 @@ vehicle-connectivity/   — ASI/RSI signal subscription
 
 - Java 21 toolchain, compileSdk 36, minSdk 33, targetSdk 35
 - Build flavors: `platform` (mib4, nextgen) × `datasource` (mock, real)
-- Convention plugins: `datacollector.android-app`, `sportapps.android-library`, `sportapps.kotlin-library`
+- Convention plugins: `datacollector.android-app`, `datacollector.android-library`, `datacollector.kotlin-library`
 - Formatting: Spotless + ktlint
 - Static analysis: Detekt (zero-tolerance)
 - Coverage: JaCoCo ≥80% per module

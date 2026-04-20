@@ -3,7 +3,7 @@ package com.porsche.datacollector
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import com.porsche.sportapps.core.logging.Logger
+import com.porsche.datacollector.core.logging.Logger
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 

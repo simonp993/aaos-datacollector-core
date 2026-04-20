@@ -1,9 +1,9 @@
 package com.porsche.datacollector.di
 
 import android.content.Context
-import com.porsche.sportapps.core.logging.Logger
-import com.porsche.sportapps.vehicleplatform.CarPropertyAdapter
-import com.porsche.sportapps.vehicleplatform.VhalPropertyService
+import com.porsche.datacollector.core.logging.Logger
+import com.porsche.datacollector.vehicleplatform.CarPropertyAdapter
+import com.porsche.datacollector.vehicleplatform.VhalPropertyService
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn

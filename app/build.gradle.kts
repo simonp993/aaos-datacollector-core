@@ -26,6 +26,11 @@ dependencies {
     implementation(project(":vehicle-platform"))
     implementation(project(":vehicle-connectivity"))
 
+    // Hidden API stubs for InputMonitor / InputChannel — compile-only, resolved at runtime
+    compileOnly(files("libs/hidden-api-stubs.jar"))
+    // Car API — provided by AAOS system at runtime
+    compileOnly(files("${rootProject.projectDir}/vehicle-platform/libs/car-35.0.0.jar"))
+
     // Vehicle platform SDK JARs — compileOnly in :vehicle-connectivity.
     // RSI STAPI + utility classes are provided by the MIB4 system framework at runtime.
     // ASI SportChrono client/interface JARs must be included at runtime for the real variant.

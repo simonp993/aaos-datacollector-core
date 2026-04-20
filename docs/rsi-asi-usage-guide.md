@@ -224,7 +224,7 @@ when (command.operationId) {
 
 ### Convention Plugin
 
-The `sportapps.android-library` convention plugin requires:
+The `datacollector.android-library` convention plugin requires:
 
 ```kotlin
 android {

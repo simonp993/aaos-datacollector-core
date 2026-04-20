@@ -3,9 +3,9 @@ package com.porsche.datacollector.collector.vehicle
 import com.porsche.datacollector.collector.Collector
 import com.porsche.datacollector.telemetry.Telemetry
 import com.porsche.datacollector.telemetry.TelemetryEvent
-import com.porsche.sportapps.core.logging.Logger
-import com.porsche.sportapps.vehicleplatform.VhalPropertyIds
-import com.porsche.sportapps.vehicleplatform.VhalPropertyService
+import com.porsche.datacollector.core.logging.Logger
+import com.porsche.datacollector.vehicleplatform.VhalPropertyIds
+import com.porsche.datacollector.vehicleplatform.VhalPropertyService
 import javax.inject.Inject
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.catch

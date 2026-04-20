@@ -1,11 +1,11 @@
 plugins {
-    id("sportapps.android-library")
+    id("datacollector.android-library")
     id("com.google.devtools.ksp")
     id("com.google.dagger.hilt.android")
 }
 
 android {
-    namespace = "com.porsche.sportapps.vehicleconnectivity"
+    namespace = "com.porsche.datacollector.vehicleconnectivity"
 }
 
 dependencies {

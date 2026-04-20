@@ -49,7 +49,7 @@ Use the variant name in Gradle task capitalization, e.g. `assembleDevRealDebug`,
 
 The Scylla emulator image ships a pre-installed `com.porsche.sport.chrono` system app signed with the **standard AOSP test platform key**. To install our build over it, the APK must be signed with the same key.
 
-This is already configured in the build. The convention plugin (`sportapps.android-app`) signs both debug and release builds using the AOSP test key by default. To override, copy `source/keystore.properties.template` to `source/keystore.properties` and fill in your values.
+This is already configured in the build. The convention plugin (`datacollector.android-app`) signs both debug and release builds using the AOSP test key by default. To override, copy `source/keystore.properties.template` to `source/keystore.properties` and fill in your values.
 
 Default (emulator) values:
 

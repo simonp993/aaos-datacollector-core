@@ -14,7 +14,7 @@ relates_to: [ADR-001, ADR-003]
 
 The build system defines a `datasource` flavor dimension with two values: `mock` (fake/stubbed data) and `real` (live VHAL signals, real services). A mechanism is needed to swap Hilt DI bindings based on flavor so that mock and real builds have genuinely different behavior.
 
-Per ADR-001, library modules (`vehicle-*`, `core-*`) use the `sportapps.android-library` convention plugin which declares no product flavors. Flavor-specific source sets (`src/mock/`, `src/real/`) are only available in the `:app` module.
+Per ADR-001, library modules (`vehicle-*`, `core-*`) use the `datacollector.android-library` convention plugin which declares no product flavors. Flavor-specific source sets (`src/mock/`, `src/real/`) are only available in the `:app` module.
 
 ## Decision
 

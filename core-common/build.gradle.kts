@@ -1,9 +1,9 @@
 plugins {
-    id("sportapps.android-library")
+    id("datacollector.android-library")
 }
 
 android {
-    namespace = "com.porsche.sportapps.core.common"
+    namespace = "com.porsche.datacollector.core.common"
 }
 
 dependencies {

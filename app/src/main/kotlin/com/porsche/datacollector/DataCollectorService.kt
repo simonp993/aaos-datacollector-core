@@ -8,7 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.IBinder
 import com.porsche.datacollector.collector.Collector
-import com.porsche.sportapps.core.logging.Logger
+import com.porsche.datacollector.core.logging.Logger
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -27,6 +27,28 @@ class DataCollectorService : Service() {
     lateinit var logger: Logger
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /**
+     * Master enable/disable switch for each collector.
+     * Set `true` to enable, `false` to disable.
+     * Collectors not listed here default to **enabled**.
+     */
+    private val collectorEnabled = mapOf(
+        "Audio" to true,
+        "TouchInput" to true,
+        "MediaPlayback" to true,
+        "AppLifecycle" to false,
+        "CarInfo" to false,
+        "Connectivity" to false,
+        "DriveState" to false,
+        "Memory" to false,
+        "NetworkStats" to false,
+        "Package" to false,
+        "Process" to false,
+        "SensorBattery" to false,
+        "Telephony" to false,
+        "VehicleProperty" to false,
+    )
 
     override fun onCreate() {
         super.onCreate()
@@ -51,7 +73,13 @@ class DataCollectorService : Service() {
     }
 
     private fun startCollectors() {
+        var started = 0
         collectors.forEach { collector ->
+            val enabled = collectorEnabled.getOrDefault(collector.name, true)
+            if (!enabled) {
+                logger.i(TAG, "Collector ${collector.name} is DISABLED — skipping")
+                return@forEach
+            }
             serviceScope.launch {
                 try {
                     logger.i(TAG, "Starting collector: ${collector.name}")
@@ -60,8 +88,9 @@ class DataCollectorService : Service() {
                     logger.e(TAG, "Collector ${collector.name} failed", e)
                 }
             }
+            started++
         }
-        logger.i(TAG, "Started ${collectors.size} collectors")
+        logger.i(TAG, "Started $started/${collectors.size} collectors")
     }
 
     private fun stopCollectors() {
