@@ -245,9 +245,9 @@ The Scylla system image creates 4 physical displays. Use `scrcpy` to open a sepa
 
 ```bash
 scrcpy --display-id=0 --window-title="Center Screen"       --window-width=1920 --window-height=720  &
-scrcpy --display-id=1 --window-title="Passenger Screen"     --window-width=1920 --window-height=1080 &
-scrcpy --display-id=2 --window-title="Rear-Passenger Screen" --window-width=1920 --window-height=720  &
-scrcpy --display-id=3 --window-title="Instrument Cluster"   --window-width=1280 --window-height=768  &
+scrcpy --display-id=1 --window-title="Instrument Screen"     --window-width=1920 --window-height=1080 &
+scrcpy --display-id=2 --window-title="Passenger Screen" --window-width=1920 --window-height=720  &
+scrcpy --display-id=3 --window-title="Rear Passenger Cluster"   --window-width=1280 --window-height=768  &
 ```
 
 ### Display Mapping
