@@ -22,6 +22,7 @@ class AudioCollector @Inject constructor(
 ) : Collector {
 
     override val name: String = "Audio"
+    private val signalId = TelemetryEvent.signalId("${name}Collector")
 
     @Volatile
     private var running = false
@@ -111,7 +112,7 @@ class AudioCollector @Inject constructor(
             }
         }
 
-        val payload = mutableMapOf<String, Any>(
+        val metadata = mutableMapOf<String, Any>(
             "musicVolume" to audioManager.getStreamVolume(AudioManager.STREAM_MUSIC),
             "ringVolume" to audioManager.getStreamVolume(AudioManager.STREAM_RING),
             "alarmVolume" to audioManager.getStreamVolume(AudioManager.STREAM_ALARM),
@@ -121,10 +122,18 @@ class AudioCollector @Inject constructor(
             "outputDevices" to uniqueDevices,
         )
         if (volumeGroups.isNotEmpty()) {
-            payload["carVolumeGroups"] = volumeGroups
+            metadata["carVolumeGroups"] = volumeGroups
         }
 
-        telemetry.send(TelemetryEvent(eventId = "audio.state", payload = payload))
+        telemetry.send(
+            TelemetryEvent(
+                signalId = signalId,
+                payload = mapOf(
+                    "actionName" to "Audio_StatePolled",
+                    "metadata" to metadata,
+                ),
+            ),
+        )
     }
 
     private fun deviceLabel(device: AudioDeviceInfo): String =

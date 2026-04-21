@@ -15,6 +15,7 @@ class CarInfoCollector @Inject constructor(
 ) : Collector {
 
     override val name: String = "CarInfo"
+    private val signalId = TelemetryEvent.signalId("${name}Collector")
 
     override suspend fun start() {
         logger.i(TAG, "Collecting car info (one-shot)")
@@ -30,8 +31,11 @@ class CarInfoCollector @Inject constructor(
 
         telemetry.send(
             TelemetryEvent(
-                eventId = "car.info",
-                payload = info,
+                signalId = signalId,
+                payload = mapOf(
+                    "actionName" to "CarInfo_Collected",
+                    "metadata" to info,
+                ),
             ),
         )
         logger.i(TAG, "Car info collected: ${info.keys}")

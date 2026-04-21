@@ -19,6 +19,7 @@ class TelephonyCollector @Inject constructor(
 ) : Collector {
 
     override val name: String = "Telephony"
+    private val signalId = TelemetryEvent.signalId("${name}Collector")
 
     private var telephonyManager: TelephonyManager? = null
     private var phoneStateListener: PhoneStateListener? = null
@@ -35,10 +36,13 @@ class TelephonyCollector @Inject constructor(
             override fun onCallStateChanged(state: Int, phoneNumber: String?) {
                 telemetry.send(
                     TelemetryEvent(
-                        eventId = "telephony.call_state",
+                        signalId = signalId,
                         payload = mapOf(
-                            "state" to state,
-                            "label" to callStateLabel(state),
+                            "actionName" to "Telephony_CallStateChanged",
+                            "metadata" to mapOf(
+                                "state" to state,
+                                "label" to callStateLabel(state),
+                            ),
                         ),
                     ),
                 )
@@ -47,9 +51,12 @@ class TelephonyCollector @Inject constructor(
             override fun onSignalStrengthsChanged(signalStrength: SignalStrength?) {
                 telemetry.send(
                     TelemetryEvent(
-                        eventId = "telephony.signal",
+                        signalId = signalId,
                         payload = mapOf(
-                            "level" to (signalStrength?.level ?: -1),
+                            "actionName" to "Telephony_SignalChanged",
+                            "metadata" to mapOf(
+                                "level" to (signalStrength?.level ?: -1),
+                            ),
                         ),
                     ),
                 )
@@ -75,12 +82,15 @@ class TelephonyCollector @Inject constructor(
     private fun sendTelephonyState(tm: TelephonyManager) {
         telemetry.send(
             TelemetryEvent(
-                eventId = "telephony.state",
+                signalId = signalId,
                 payload = mapOf(
-                    "simState" to tm.simState,
-                    "networkOperator" to tm.networkOperatorName,
-                    "isNetworkRoaming" to tm.isNetworkRoaming,
-                    "dataNetworkType" to tm.dataNetworkType,
+                    "actionName" to "Telephony_StateCollected",
+                    "metadata" to mapOf(
+                        "simState" to tm.simState,
+                        "networkOperator" to tm.networkOperatorName,
+                        "isNetworkRoaming" to tm.isNetworkRoaming,
+                        "dataNetworkType" to tm.dataNetworkType,
+                    ),
                 ),
             ),
         )

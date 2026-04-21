@@ -37,6 +37,7 @@ class DataCollectorService : Service() {
         "Audio" to true,
         "TouchInput" to true,
         "MediaPlayback" to true,
+        "TimeChange" to true,
         "AppLifecycle" to false,
         "CarInfo" to false,
         "Connectivity" to false,

@@ -19,6 +19,7 @@ class MemoryCollector @Inject constructor(
 ) : Collector {
 
     override val name: String = "Memory"
+    private val signalId = TelemetryEvent.signalId("${name}Collector")
 
     @Volatile
     private var running = false
@@ -34,12 +35,15 @@ class MemoryCollector @Inject constructor(
 
             telemetry.send(
                 TelemetryEvent(
-                    eventId = "system.memory",
+                    signalId = signalId,
                     payload = mapOf(
-                        "totalMem" to memInfo.totalMem,
-                        "availMem" to memInfo.availMem,
-                        "lowMemory" to memInfo.lowMemory,
-                        "threshold" to memInfo.threshold,
+                        "actionName" to "Memory_StatePolled",
+                        "metadata" to mapOf(
+                            "totalMem" to memInfo.totalMem,
+                            "availMem" to memInfo.availMem,
+                            "lowMemory" to memInfo.lowMemory,
+                            "threshold" to memInfo.threshold,
+                        ),
                     ),
                 ),
             )

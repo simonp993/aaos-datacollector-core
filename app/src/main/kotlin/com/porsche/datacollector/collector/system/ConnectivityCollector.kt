@@ -19,6 +19,7 @@ class ConnectivityCollector @Inject constructor(
 ) : Collector {
 
     override val name: String = "Connectivity"
+    private val signalId = TelemetryEvent.signalId("${name}Collector")
 
     private var connectivityManager: ConnectivityManager? = null
 
@@ -26,15 +27,18 @@ class ConnectivityCollector @Inject constructor(
         override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
             telemetry.send(
                 TelemetryEvent(
-                    eventId = "connectivity.capabilities",
+                    signalId = signalId,
                     payload = mapOf(
-                        "hasWifi" to capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI),
-                        "hasCellular" to capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR),
-                        "hasEthernet" to capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET),
-                        "hasBluetooth" to capabilities.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH),
-                        "hasVpn" to capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN),
-                        "downstreamBandwidthKbps" to capabilities.linkDownstreamBandwidthKbps,
-                        "upstreamBandwidthKbps" to capabilities.linkUpstreamBandwidthKbps,
+                        "actionName" to "Connectivity_CapabilitiesChanged",
+                        "metadata" to mapOf(
+                            "hasWifi" to capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI),
+                            "hasCellular" to capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR),
+                            "hasEthernet" to capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET),
+                            "hasBluetooth" to capabilities.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH),
+                            "hasVpn" to capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN),
+                            "downstreamBandwidthKbps" to capabilities.linkDownstreamBandwidthKbps,
+                            "upstreamBandwidthKbps" to capabilities.linkUpstreamBandwidthKbps,
+                        ),
                     ),
                 ),
             )
@@ -43,8 +47,11 @@ class ConnectivityCollector @Inject constructor(
         override fun onLost(network: Network) {
             telemetry.send(
                 TelemetryEvent(
-                    eventId = "connectivity.lost",
-                    payload = mapOf("network" to network.toString()),
+                    signalId = signalId,
+                    payload = mapOf(
+                        "actionName" to "Connectivity_NetworkLost",
+                        "metadata" to mapOf("network" to network.toString()),
+                    ),
                 ),
             )
         }

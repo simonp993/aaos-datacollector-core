@@ -20,6 +20,7 @@ class AppLifecycleCollector @Inject constructor(
 ) : Collector {
 
     override val name: String = "AppLifecycle"
+    private val signalId = TelemetryEvent.signalId("${name}Collector")
 
     @Volatile
     private var running = false
@@ -41,10 +42,13 @@ class AppLifecycleCollector @Inject constructor(
                     UsageEvents.Event.ACTIVITY_RESUMED -> {
                         telemetry.send(
                             TelemetryEvent(
-                                eventId = "app.foreground",
+                                signalId = signalId,
                                 payload = mapOf(
-                                    "package" to event.packageName,
-                                    "class" to event.className,
+                                    "actionName" to "AppLifecycle_Resumed",
+                                    "metadata" to mapOf(
+                                        "package" to event.packageName,
+                                        "class" to event.className,
+                                    ),
                                 ),
                             ),
                         )
@@ -52,10 +56,13 @@ class AppLifecycleCollector @Inject constructor(
                     UsageEvents.Event.ACTIVITY_PAUSED -> {
                         telemetry.send(
                             TelemetryEvent(
-                                eventId = "app.background",
+                                signalId = signalId,
                                 payload = mapOf(
-                                    "package" to event.packageName,
-                                    "class" to event.className,
+                                    "actionName" to "AppLifecycle_Paused",
+                                    "metadata" to mapOf(
+                                        "package" to event.packageName,
+                                        "class" to event.className,
+                                    ),
                                 ),
                             ),
                         )

@@ -20,6 +20,7 @@ class NetworkStatsCollector @Inject constructor(
 ) : Collector {
 
     override val name: String = "NetworkStats"
+    private val signalId = TelemetryEvent.signalId("${name}Collector")
 
     @Volatile
     private var running = false
@@ -56,10 +57,13 @@ class NetworkStatsCollector @Inject constructor(
             )
             telemetry.send(
                 TelemetryEvent(
-                    eventId = "network.total.wifi",
+                    signalId = signalId,
                     payload = mapOf(
-                        "rxBytes" to wifiBucket.rxBytes,
-                        "txBytes" to wifiBucket.txBytes,
+                        "actionName" to "Network_WifiTotalCollected",
+                        "metadata" to mapOf(
+                            "rxBytes" to wifiBucket.rxBytes,
+                            "txBytes" to wifiBucket.txBytes,
+                        ),
                     ),
                 ),
             )
@@ -73,10 +77,13 @@ class NetworkStatsCollector @Inject constructor(
             )
             telemetry.send(
                 TelemetryEvent(
-                    eventId = "network.total.mobile",
+                    signalId = signalId,
                     payload = mapOf(
-                        "rxBytes" to mobileBucket.rxBytes,
-                        "txBytes" to mobileBucket.txBytes,
+                        "actionName" to "Network_MobileTotalCollected",
+                        "metadata" to mapOf(
+                            "rxBytes" to mobileBucket.rxBytes,
+                            "txBytes" to mobileBucket.txBytes,
+                        ),
                     ),
                 ),
             )
@@ -121,8 +128,11 @@ class NetworkStatsCollector @Inject constructor(
             if (perApp.isNotEmpty()) {
                 telemetry.send(
                     TelemetryEvent(
-                        eventId = "network.per_app",
-                        payload = mapOf("apps" to perApp),
+                        signalId = signalId,
+                        payload = mapOf(
+                            "actionName" to "Network_PerAppStatsCollected",
+                            "metadata" to mapOf("apps" to perApp),
+                        ),
                     ),
                 )
             }

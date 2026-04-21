@@ -19,6 +19,7 @@ class ProcessCollector @Inject constructor(
 ) : Collector {
 
     override val name: String = "Process"
+    private val signalId = TelemetryEvent.signalId("${name}Collector")
 
     @Volatile
     private var running = false
@@ -41,10 +42,13 @@ class ProcessCollector @Inject constructor(
 
             telemetry.send(
                 TelemetryEvent(
-                    eventId = "system.processes",
+                    signalId = signalId,
                     payload = mapOf(
-                        "count" to processes.size,
-                        "processes" to processList,
+                        "actionName" to "Process_ListPolled",
+                        "metadata" to mapOf(
+                            "count" to processes.size,
+                            "processes" to processList,
+                        ),
                     ),
                 ),
             )

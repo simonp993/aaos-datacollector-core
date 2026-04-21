@@ -18,6 +18,7 @@ class DriveStateCollector @Inject constructor(
 ) : Collector {
 
     override val name: String = "DriveState"
+    private val signalId = TelemetryEvent.signalId("${name}Collector")
 
     @Volatile
     private var running = false
@@ -42,10 +43,13 @@ class DriveStateCollector @Inject constructor(
                 if (!running) return@collect
                 telemetry.send(
                     TelemetryEvent(
-                        eventId = "drive.speed",
+                        signalId = signalId,
                         payload = mapOf(
-                            "speedMps" to speed,
-                            "moving" to (speed > 0f),
+                            "actionName" to "DriveState_SpeedChanged",
+                            "metadata" to mapOf(
+                                "speedMps" to speed,
+                                "moving" to (speed > 0f),
+                            ),
                         ),
                     ),
                 )
@@ -59,8 +63,11 @@ class DriveStateCollector @Inject constructor(
                 if (!running) return@collect
                 telemetry.send(
                     TelemetryEvent(
-                        eventId = "drive.parking_brake",
-                        payload = mapOf("parked" to parked),
+                        signalId = signalId,
+                        payload = mapOf(
+                            "actionName" to "DriveState_ParkingBrakeChanged",
+                            "metadata" to mapOf("parked" to parked),
+                        ),
                     ),
                 )
             }

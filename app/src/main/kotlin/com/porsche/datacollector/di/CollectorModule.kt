@@ -11,6 +11,7 @@ import com.porsche.datacollector.collector.system.PackageCollector
 import com.porsche.datacollector.collector.system.ProcessCollector
 import com.porsche.datacollector.collector.system.SensorBatteryCollector
 import com.porsche.datacollector.collector.system.TelephonyCollector
+import com.porsche.datacollector.collector.system.TimeChangeCollector
 import com.porsche.datacollector.collector.system.TouchInputCollector
 import com.porsche.datacollector.collector.vehicle.CarInfoCollector
 import com.porsche.datacollector.collector.vehicle.DriveStateCollector
@@ -80,4 +81,8 @@ abstract class CollectorModule {
     @Binds
     @IntoSet
     abstract fun bindPackageCollector(impl: PackageCollector): Collector
+
+    @Binds
+    @IntoSet
+    abstract fun bindTimeChangeCollector(impl: TimeChangeCollector): Collector
 }

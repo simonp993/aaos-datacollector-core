@@ -21,6 +21,7 @@ class MediaPlaybackCollector @Inject constructor(
 ) : Collector {
 
     override val name: String = "MediaPlayback"
+    private val signalId = TelemetryEvent.signalId("${name}Collector")
 
     private var sessionManager: MediaSessionManager? = null
     private val activeCallbacks = mutableMapOf<MediaController, MediaController.Callback>()
@@ -139,11 +140,14 @@ class MediaPlaybackCollector @Inject constructor(
     private fun sendPlaybackEvent(controller: MediaController, state: PlaybackState?) {
         telemetry.send(
             TelemetryEvent(
-                eventId = "media.playback_state",
+                signalId = signalId,
                 payload = mapOf(
-                    "package" to controller.packageName,
-                    "state" to (state?.state ?: PlaybackState.STATE_NONE),
-                    "position" to (state?.position ?: 0L),
+                    "actionName" to "Media_PlaybackStateChanged",
+                    "metadata" to mapOf(
+                        "package" to controller.packageName,
+                        "state" to (state?.state ?: PlaybackState.STATE_NONE),
+                        "position" to (state?.position ?: 0L),
+                    ),
                 ),
             ),
         )
@@ -153,12 +157,15 @@ class MediaPlaybackCollector @Inject constructor(
         if (metadata == null) return
         telemetry.send(
             TelemetryEvent(
-                eventId = "media.metadata",
+                signalId = signalId,
                 payload = mapOf(
-                    "package" to controller.packageName,
-                    "title" to metadata.getString(android.media.MediaMetadata.METADATA_KEY_TITLE),
-                    "artist" to metadata.getString(android.media.MediaMetadata.METADATA_KEY_ARTIST),
-                    "duration" to metadata.getLong(android.media.MediaMetadata.METADATA_KEY_DURATION),
+                    "actionName" to "Media_MetadataChanged",
+                    "metadata" to mapOf(
+                        "package" to controller.packageName,
+                        "title" to metadata.getString(android.media.MediaMetadata.METADATA_KEY_TITLE),
+                        "artist" to metadata.getString(android.media.MediaMetadata.METADATA_KEY_ARTIST),
+                        "duration" to metadata.getLong(android.media.MediaMetadata.METADATA_KEY_DURATION),
+                    ),
                 ),
             ),
         )

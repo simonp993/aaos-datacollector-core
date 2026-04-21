@@ -35,6 +35,7 @@ class TouchInputCollector @Inject constructor(
 ) : Collector {
 
     override val name: String = "TouchInput"
+    private val signalId = TelemetryEvent.signalId("${name}Collector")
 
     @Volatile
     private var running = false
@@ -171,14 +172,16 @@ class TouchInputCollector @Inject constructor(
 
             telemetry.send(
                 TelemetryEvent(
-                    eventId = "input.touch",
+                    signalId = signalId,
                     payload = mapOf(
-                        "display" to displayName,
-                        "displayId" to displayId,
-                        "action" to actionName,
-                        "x" to event.x,
-                        "y" to event.y,
-                        "pointerCount" to event.pointerCount,
+                        "actionName" to "TouchInput_${actionName}",
+                        "metadata" to mapOf(
+                            "display" to displayName,
+                            "displayId" to displayId,
+                            "x" to event.x,
+                            "y" to event.y,
+                            "pointerCount" to event.pointerCount,
+                        ),
                     ),
                 ),
             )

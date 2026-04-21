@@ -25,6 +25,7 @@ class SensorBatteryCollector @Inject constructor(
 ) : Collector {
 
     override val name: String = "SensorBattery"
+    private val signalId = TelemetryEvent.signalId("${name}Collector")
 
     @Volatile
     private var running = false
@@ -69,12 +70,17 @@ class SensorBatteryCollector @Inject constructor(
 
         val listener = object : SensorEventListener {
             override fun onSensorChanged(event: SensorEvent) {
+                val action = label.split("_")
+                    .joinToString("") { it.replaceFirstChar(Char::uppercase) }
                 telemetry.send(
                     TelemetryEvent(
-                        eventId = "sensor.$label",
+                        signalId = signalId,
                         payload = mapOf(
-                            "values" to event.values.toList(),
-                            "accuracy" to event.accuracy,
+                            "actionName" to "Sensor_${action}Changed",
+                            "metadata" to mapOf(
+                                "values" to event.values.toList(),
+                                "accuracy" to event.accuracy,
+                            ),
                         ),
                     ),
                 )
@@ -98,12 +104,15 @@ class SensorBatteryCollector @Inject constructor(
 
             telemetry.send(
                 TelemetryEvent(
-                    eventId = "battery.state",
+                    signalId = signalId,
                     payload = mapOf(
-                        "level" to if (scale > 0) (level * 100 / scale) else -1,
-                        "charging" to (status == BatteryManager.BATTERY_STATUS_CHARGING),
-                        "temperatureTenthsC" to temperature,
-                        "status" to status,
+                        "actionName" to "Battery_StatePolled",
+                        "metadata" to mapOf(
+                            "level" to if (scale > 0) (level * 100 / scale) else -1,
+                            "charging" to (status == BatteryManager.BATTERY_STATUS_CHARGING),
+                            "temperatureTenthsC" to temperature,
+                            "status" to status,
+                        ),
                     ),
                 ),
             )

@@ -18,6 +18,7 @@ class VehiclePropertyCollector @Inject constructor(
 ) : Collector {
 
     override val name: String = "VehicleProperty"
+    private val signalId = TelemetryEvent.signalId("${name}Collector")
 
     @Volatile
     private var running = false
@@ -33,12 +34,17 @@ class VehiclePropertyCollector @Inject constructor(
                         }
                         .collect { value ->
                             if (!running) return@collect
+                            val action = propertyName.split("_")
+                                .joinToString("") { it.replaceFirstChar(Char::uppercase) }
                             telemetry.send(
                                 TelemetryEvent(
-                                    eventId = "vehicle.$propertyName",
+                                    signalId = signalId,
                                     payload = mapOf(
-                                        "propertyId" to propertyId,
-                                        "value" to value,
+                                        "actionName" to "Vehicle_${action}Changed",
+                                        "metadata" to mapOf(
+                                            "propertyId" to propertyId,
+                                            "value" to value,
+                                        ),
                                     ),
                                 ),
                             )

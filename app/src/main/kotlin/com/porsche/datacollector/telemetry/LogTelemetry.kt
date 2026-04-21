@@ -10,7 +10,8 @@ class LogTelemetry @Inject constructor(
     override fun send(event: TelemetryEvent) {
         logger.d(
             TAG,
-            "[${event.eventId}] ts=${event.timestamp} payload=${event.payload}",
+            "[${event.signalId}] ${event.payload["actionName"]} ts=${event.timestamp}" +
+                " payload=${event.payload}",
         )
     }
 

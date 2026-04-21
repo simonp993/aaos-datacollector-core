@@ -19,6 +19,7 @@ class PackageCollector @Inject constructor(
 ) : Collector {
 
     override val name: String = "Package"
+    private val signalId = TelemetryEvent.signalId("${name}Collector")
 
     private var packageReceiver: BroadcastReceiver? = null
 
@@ -32,16 +33,19 @@ class PackageCollector @Inject constructor(
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context, intent: Intent) {
                 val packageName = intent.data?.schemeSpecificPart ?: return
-                val eventId = when (intent.action) {
-                    Intent.ACTION_PACKAGE_ADDED -> "package.installed"
-                    Intent.ACTION_PACKAGE_REMOVED -> "package.removed"
-                    Intent.ACTION_PACKAGE_REPLACED -> "package.updated"
+                val actionName = when (intent.action) {
+                    Intent.ACTION_PACKAGE_ADDED -> "Package_Installed"
+                    Intent.ACTION_PACKAGE_REMOVED -> "Package_Removed"
+                    Intent.ACTION_PACKAGE_REPLACED -> "Package_Updated"
                     else -> return
                 }
                 telemetry.send(
                     TelemetryEvent(
-                        eventId = eventId,
-                        payload = mapOf("package" to packageName),
+                        signalId = signalId,
+                        payload = mapOf(
+                            "actionName" to actionName,
+                            "metadata" to mapOf("package" to packageName),
+                        ),
                     ),
                 )
             }
@@ -80,10 +84,13 @@ class PackageCollector @Inject constructor(
 
             telemetry.send(
                 TelemetryEvent(
-                    eventId = "package.inventory",
+                    signalId = signalId,
                     payload = mapOf(
-                        "count" to packages.size,
-                        "packages" to packageList,
+                        "actionName" to "Package_InventoryCollected",
+                        "metadata" to mapOf(
+                            "count" to packages.size,
+                            "packages" to packageList,
+                        ),
                     ),
                 ),
             )
