@@ -48,7 +48,7 @@ class DataCollectorService : Service() {
         "Process" to false,
         "SensorBattery" to false,
         "Telephony" to false,
-        "VehicleProperty" to false,
+        "VehicleProperty" to true,
     )
 
     override fun onCreate() {
