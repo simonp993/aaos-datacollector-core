@@ -255,9 +255,9 @@ scrcpy --display-id=3 --window-title="Rear Passenger Cluster"   --window-width=1
 | Display ID | Resolution  | DPI | Role                  |
 | ---------- | ----------- | --- | --------------------- |
 | 0          | 1920 x 720  | 160 | Center Screen         |
-| 1          | 1920 x 1080 | 160 | Passenger Screen      |
-| 2          | 1920 x 720  | 160 | Rear-Passenger Screen |
-| 3          | 1280 x 768  | 160 | Instrument Cluster    |
+| 1          | 1920 x 1080 | 160 | Instrument Screen      |
+| 2          | 1920 x 720  | 160 | Passenger Screen |
+| 3          | 1280 x 768  | 160 | Rear-Passenger Screen   |
 
 > If multiple emulators are running, specify which one to target: `scrcpy -s emulator-5554 --display-id=0 ...`
 
