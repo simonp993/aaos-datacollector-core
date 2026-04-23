@@ -10,9 +10,12 @@ import com.porsche.datacollector.core.logging.Logger
 import com.porsche.datacollector.telemetry.Telemetry
 import com.porsche.datacollector.telemetry.TelemetryEvent
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.File
 import javax.inject.Inject
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import org.xmlpull.v1.XmlPullParser
+import org.xmlpull.v1.XmlPullParserFactory
 import kotlin.coroutines.coroutineContext
 
 class AudioCollector @Inject constructor(
@@ -30,51 +33,67 @@ class AudioCollector @Inject constructor(
     private var carAudioManager: CarAudioManager? = null
     private var volumeCallback: CarAudioManager.CarVolumeCallback? = null
 
+    // Tracks the last emitted state to suppress duplicate emissions.
+    private var lastEmittedState: Map<String, Any>? = null
+
+    // Maps groupIndex → primary context name from car_audio_configuration.xml
+    private var groupContextNames: Map<Int, String> = emptyMap()
+
     override suspend fun start() {
         running = true
         logger.i(TAG, "Starting audio monitoring")
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
         // Connect to Car service for AAOS volume monitoring
+        var callbackRegistered = false
         try {
             val carInstance = Car.createCar(context) ?: throw IllegalStateException("Car.createCar returned null")
             car = carInstance
             val cam = carInstance.getCarManager(Car.AUDIO_SERVICE) as CarAudioManager
             carAudioManager = cam
+            groupContextNames = parseVolumeGroupContexts()
+            if (groupContextNames.isNotEmpty()) {
+                logger.i(TAG, "Resolved volume group contexts: $groupContextNames")
+            }
 
             val callback = object : CarAudioManager.CarVolumeCallback() {
                 override fun onGroupVolumeChanged(zoneId: Int, groupId: Int, flags: Int) {
                     if (running) {
                         logger.d(TAG, "Car volume changed: zone=$zoneId group=$groupId")
-                        emitAudioState(audioManager, cam)
+                        emitIfChanged(audioManager, cam)
                     }
                 }
 
                 override fun onMasterMuteChanged(zoneId: Int, flags: Int) {
                     if (running) {
                         logger.d(TAG, "Car master mute changed: zone=$zoneId")
-                        emitAudioState(audioManager, cam)
+                        emitIfChanged(audioManager, cam)
                     }
                 }
 
                 override fun onGroupMuteChanged(zoneId: Int, groupId: Int, flags: Int) {
                     if (running) {
                         logger.d(TAG, "Car group mute changed: zone=$zoneId group=$groupId")
-                        emitAudioState(audioManager, cam)
+                        emitIfChanged(audioManager, cam)
                     }
                 }
             }
             volumeCallback = callback
             cam.registerCarVolumeCallback(callback)
-            logger.i(TAG, "Registered CarVolumeCallback")
+            callbackRegistered = true
+            logger.i(TAG, "Registered CarVolumeCallback — event-driven mode")
         } catch (e: Exception) {
             logger.w(TAG, "Car audio not available, falling back to poll-only: ${e.message}")
         }
 
-        // Initial emit + periodic fallback poll
+        // Emit initial state once.
+        emitIfChanged(audioManager, carAudioManager)
+
+        // Periodic re-emit every 60s regardless of change (debugging aid).
+        // Callbacks still trigger immediate emission on actual changes.
         while (running && coroutineContext.isActive) {
-            emitAudioState(audioManager, carAudioManager)
-            delay(POLL_INTERVAL_MS)
+            delay(KEEP_ALIVE_MS)
+            emitState(audioManager, carAudioManager)
         }
     }
 
@@ -90,7 +109,30 @@ class AudioCollector @Inject constructor(
         logger.i(TAG, "Stopped")
     }
 
-    private fun emitAudioState(audioManager: AudioManager, cam: CarAudioManager?) {
+    private fun emitIfChanged(audioManager: AudioManager, cam: CarAudioManager?) {
+        val metadata = buildAudioState(audioManager, cam)
+        if (metadata == lastEmittedState) return
+        emitState(audioManager, cam)
+    }
+
+    private fun emitState(audioManager: AudioManager, cam: CarAudioManager?) {
+        val metadata = buildAudioState(audioManager, cam)
+        lastEmittedState = metadata
+        telemetry.send(
+            TelemetryEvent(
+                signalId = signalId,
+                payload = mapOf(
+                    "actionName" to "Audio_VolumeStateChanged",
+                    "metadata" to metadata,
+                ),
+            ),
+        )
+    }
+
+    private fun buildAudioState(
+        audioManager: AudioManager,
+        cam: CarAudioManager?,
+    ): Map<String, Any> {
         val outputDevices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
         val uniqueDevices = outputDevices
             .distinctBy { "${it.type}-${it.productName}" }
@@ -105,7 +147,9 @@ class AudioCollector @Inject constructor(
                 for (groupId in 0 until groupCount) {
                     val vol = cam.getGroupVolume(groupId)
                     val max = cam.getGroupMaxVolume(groupId)
-                    volumeGroups["group$groupId"] = "$vol/$max"
+                    val key = groupContextNames[groupId]
+                        ?: "group${groupId}__car_audio_configuration_xml_read_error"
+                    volumeGroups[key] = "$vol/$max"
                 }
             } catch (e: Exception) {
                 logger.w(TAG, "Error reading car volume groups: ${e.message}")
@@ -124,24 +168,87 @@ class AudioCollector @Inject constructor(
         if (volumeGroups.isNotEmpty()) {
             metadata["carVolumeGroups"] = volumeGroups
         }
-
-        telemetry.send(
-            TelemetryEvent(
-                signalId = signalId,
-                payload = mapOf(
-                    "actionName" to "Audio_StatePolled",
-                    "metadata" to metadata,
-                ),
-            ),
-        )
+        return metadata
     }
 
     private fun deviceLabel(device: AudioDeviceInfo): String =
         "${device.productName} (type=${device.type})"
 
+    /**
+     * Parses /vendor/etc/car_audio_configuration.xml to build a map of
+     * volume group index → primary audio context name for the primary zone.
+     * Returns an empty map if the file is missing or unparseable.
+     */
+    @Suppress("TooGenericExceptionCaught")
+    private fun parseVolumeGroupContexts(): Map<Int, String> {
+        val file = File(CAR_AUDIO_CONFIG_PATH)
+        if (!file.exists()) {
+            logger.w(TAG, "car_audio_configuration.xml not found at $CAR_AUDIO_CONFIG_PATH")
+            return emptyMap()
+        }
+        return try {
+            val factory = XmlPullParserFactory.newInstance()
+            val parser = factory.newPullParser()
+            file.inputStream().use { stream ->
+                parser.setInput(stream, null)
+                parseGroupContexts(parser)
+            }
+        } catch (e: Exception) {
+            logger.w(TAG, "Failed to parse car_audio_configuration.xml: ${e.message}")
+            emptyMap()
+        }
+    }
+
+    private fun parseGroupContexts(parser: XmlPullParser): Map<Int, String> {
+        val result = mutableMapOf<Int, String>()
+        var inPrimaryZone = false
+        var groupIndex = 0
+        val currentGroupContexts = mutableListOf<String>()
+
+        var eventType = parser.eventType
+        while (eventType != XmlPullParser.END_DOCUMENT) {
+            when (eventType) {
+                XmlPullParser.START_TAG -> {
+                    when (parser.name) {
+                        "zone" -> {
+                            inPrimaryZone = parser.getAttributeValue(null, "isPrimary") == "true"
+                        }
+                        "group" -> {
+                            if (inPrimaryZone) currentGroupContexts.clear()
+                        }
+                        "context" -> {
+                            if (inPrimaryZone) {
+                                parser.getAttributeValue(null, "context")?.let {
+                                    currentGroupContexts.add(it)
+                                }
+                            }
+                        }
+                    }
+                }
+                XmlPullParser.END_TAG -> {
+                    when (parser.name) {
+                        "group" -> {
+                            if (inPrimaryZone && currentGroupContexts.isNotEmpty()) {
+                                result[groupIndex] = currentGroupContexts.joinToString("__")
+                                groupIndex++
+                            }
+                        }
+                        "zone" -> {
+                            if (inPrimaryZone) return result
+                        }
+                    }
+                }
+            }
+            eventType = parser.next()
+        }
+        return result
+    }
+
     companion object {
         private const val TAG = "AudioCollector"
         private const val POLL_INTERVAL_MS = 10_000L
+        private const val KEEP_ALIVE_MS = 60_000L
         private const val MAX_DEVICES = 5
+        private const val CAR_AUDIO_CONFIG_PATH = "/vendor/etc/car_audio_configuration.xml"
     }
 }

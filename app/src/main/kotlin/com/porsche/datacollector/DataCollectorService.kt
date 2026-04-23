@@ -43,7 +43,7 @@ class DataCollectorService : Service() {
         "Connectivity" to false,
         "DriveState" to false,
         "Memory" to false,
-        "NetworkStats" to false,
+        "NetworkStats" to true,
         "Package" to false,
         "Process" to false,
         "SensorBattery" to false,
