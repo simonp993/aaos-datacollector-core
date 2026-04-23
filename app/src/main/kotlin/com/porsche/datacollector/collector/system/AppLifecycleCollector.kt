@@ -25,8 +25,12 @@ class AppLifecycleCollector @Inject constructor(
     @Volatile
     private var running = false
 
-    // Tracks the last-known top activity per taskId to detect transitions.
-    private val lastTopActivity = mutableMapOf<Int, ComponentName>()
+    // Tracks the foreground activity per display to detect transitions.
+    // Key = displayId, Value = topActivity of the topmost task on that display.
+    // getAllRootTaskInfos() returns tasks in z-order (top first), so the first
+    // task per displayId is the foreground task the user sees.
+    private val foregroundByDisplay = mutableMapOf<Int, ComponentName>()
+    private var initialPollDone = false
 
     override suspend fun start() {
         running = true
@@ -49,52 +53,65 @@ class AppLifecycleCollector @Inject constructor(
         }
         logger.i(TAG, "Using IActivityTaskManager.getAllRootTaskInfos() for cross-user monitoring")
 
-        // Cache the field accessors for topActivity and taskId from TaskInfo base class.
+        // Cache the field accessors from TaskInfo base class.
         val taskInfoClass = Class.forName("android.app.TaskInfo")
         val topActivityField = taskInfoClass.getField("topActivity")
-        val taskIdField = taskInfoClass.getField("taskId")
         val displayIdField = taskInfoClass.getField("displayId")
 
         while (running && coroutineContext.isActive) {
             try {
                 @Suppress("UNCHECKED_CAST")
                 val tasks = getAllRootTaskInfos.invoke(atmService) as List<Any>
-                if (lastTopActivity.isEmpty() && tasks.isNotEmpty()) {
-                    val tops = tasks.mapNotNull {
-                        (topActivityField.get(it) as? ComponentName)?.packageName
-                    }
-                    logger.i(TAG, "Initial poll: ${tasks.size} tasks, tops=$tops")
-                }
+
+                // Build current foreground: first task per displayId (z-order = top first).
+                val currentForeground = mutableMapOf<Int, ComponentName>()
                 for (task in tasks) {
                     val topActivity = topActivityField.get(task) as? ComponentName ?: continue
-                    val taskId = taskIdField.getInt(task)
                     val displayId = displayIdField.getInt(task)
-                    val previous = lastTopActivity[taskId]
-                    if (previous != topActivity) {
-                        if (previous != null) {
-                            logger.d(
-                                TAG,
-                                "Activity paused: display=$displayId" +
-                                    " pkg=${previous.packageName} cls=${previous.className}",
-                            )
-                            telemetry.send(
-                                TelemetryEvent(
-                                    signalId = signalId,
-                                    payload = mapOf(
-                                        "actionName" to "AppLifecycle_Paused",
-                                        "metadata" to mapOf(
-                                            "package" to previous.packageName,
-                                            "class" to previous.className,
-                                            "displayId" to displayId,
-                                        ),
+                    currentForeground.putIfAbsent(displayId, topActivity)
+                }
+
+                if (!initialPollDone && currentForeground.isNotEmpty()) {
+                    val summary = currentForeground.entries.joinToString {
+                        "display=${it.key} → ${it.value.packageName}"
+                    }
+                    logger.i(TAG, "Initial poll: $summary")
+                    initialPollDone = true
+                }
+
+                // Detect changes: emit Paused for old, Resumed for new.
+                val allDisplays = foregroundByDisplay.keys + currentForeground.keys
+                for (displayId in allDisplays) {
+                    val previous = foregroundByDisplay[displayId]
+                    val current = currentForeground[displayId]
+
+                    if (previous == current) continue
+
+                    if (previous != null) {
+                        logger.d(
+                            TAG,
+                            "Activity paused: display=$displayId" +
+                                " pkg=${previous.packageName} cls=${previous.className}",
+                        )
+                        telemetry.send(
+                            TelemetryEvent(
+                                signalId = signalId,
+                                payload = mapOf(
+                                    "actionName" to "AppLifecycle_Paused",
+                                    "metadata" to mapOf(
+                                        "package" to previous.packageName,
+                                        "class" to previous.className,
+                                        "displayId" to displayId,
                                     ),
                                 ),
-                            )
-                        }
+                            ),
+                        )
+                    }
+                    if (current != null) {
                         logger.d(
                             TAG,
                             "Activity resumed: display=$displayId" +
-                                " pkg=${topActivity.packageName} cls=${topActivity.className}",
+                                " pkg=${current.packageName} cls=${current.className}",
                         )
                         telemetry.send(
                             TelemetryEvent(
@@ -102,16 +119,19 @@ class AppLifecycleCollector @Inject constructor(
                                 payload = mapOf(
                                     "actionName" to "AppLifecycle_Resumed",
                                     "metadata" to mapOf(
-                                        "package" to topActivity.packageName,
-                                        "class" to topActivity.className,
+                                        "package" to current.packageName,
+                                        "class" to current.className,
                                         "displayId" to displayId,
                                     ),
                                 ),
                             ),
                         )
-                        lastTopActivity[taskId] = topActivity
                     }
                 }
+
+                // Update state: replace with current snapshot.
+                foregroundByDisplay.clear()
+                foregroundByDisplay.putAll(currentForeground)
             } catch (e: Exception) {
                 val cause = if (e is java.lang.reflect.InvocationTargetException) e.cause else e
                 logger.e(TAG, "Error polling tasks: ${cause?.javaClass?.simpleName}: ${cause?.message}")
