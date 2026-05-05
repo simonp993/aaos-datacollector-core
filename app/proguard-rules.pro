@@ -3,4 +3,4 @@
 -keep class * extends dagger.hilt.android.internal.managers.ViewComponentManager$FragmentContextWrapper { *; }
 
 # Keep collector classes (used via Hilt multibinding)
--keep class com.porsche.datacollector.collector.** { *; }
+-keep class com.porsche.aaos.platform.telemetry.collector.** { *; }

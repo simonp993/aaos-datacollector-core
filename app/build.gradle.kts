@@ -3,10 +3,10 @@ plugins {
 }
 
 android {
-    namespace = "com.porsche.datacollector"
+    namespace = "com.porsche.aaos.platform.telemetry"
 
     defaultConfig {
-        applicationId = "com.porsche.datacollector"
+        applicationId = "com.porsche.aaos.platform.telemetry"
         versionCode = 1
         versionName = "0.1.0"
     }

@@ -3,7 +3,7 @@ plugins {
 }
 
 android {
-    namespace = "com.porsche.datacollector.core.logging"
+    namespace = "com.porsche.aaos.platform.telemetry.core.logging"
 }
 
 dependencies {

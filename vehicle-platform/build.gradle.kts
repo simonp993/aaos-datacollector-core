@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.porsche.datacollector.vehicleplatform"
+    namespace = "com.porsche.aaos.platform.telemetry.vehicleplatform"
 }
 
 dependencies {

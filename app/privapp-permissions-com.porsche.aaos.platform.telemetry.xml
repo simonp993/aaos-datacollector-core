@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<permissions>
+    <privapp-permissions package="com.porsche.aaos.platform.telemetry">
+
+        <!-- Media -->
+        <permission name="android.permission.MEDIA_CONTENT_CONTROL"/>
+
+        <!-- Network stats -->
+        <permission name="android.permission.READ_NETWORK_USAGE_HISTORY"/>
+
+        <!-- Package / usage stats -->
+        <permission name="android.permission.PACKAGE_USAGE_STATS"/>
+        <permission name="android.permission.QUERY_ALL_PACKAGES"/>
+
+        <!-- Input monitoring -->
+        <permission name="android.permission.MONITOR_INPUT"/>
+        <permission name="android.permission.DIAGNOSTIC"/>
+
+        <!-- Multi-user / cross-user -->
+        <permission name="android.permission.INTERACT_ACROSS_USERS"/>
+        <permission name="android.permission.INTERACT_ACROSS_USERS_FULL"/>
+
+        <!-- Activity task management -->
+        <permission name="android.permission.MANAGE_ACTIVITY_TASKS"/>
+
+        <!-- Foreground service -->
+        <permission name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+
+        <!-- Boot -->
+        <permission name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+
+        <!-- Car permissions -->
+        <permission name="android.car.permission.CAR_SPEED"/>
+        <permission name="android.car.permission.CAR_INFO"/>
+        <permission name="android.car.permission.CAR_ENERGY"/>
+        <permission name="android.car.permission.CAR_DRIVING_STATE"/>
+        <permission name="android.car.permission.CAR_MEDIA"/>
+        <permission name="android.car.permission.CAR_CONTROL_AUDIO_VOLUME"/>
+        <permission name="android.car.permission.CAR_VENDOR_EXTENSION"/>
+        <permission name="android.car.permission.GET_CAR_VENDOR_CATEGORY_1"/>
+        <permission name="android.car.permission.CAR_POWERTRAIN"/>
+        <permission name="android.car.permission.CAR_DYNAMICS_STATE"/>
+        <permission name="android.car.permission.CAR_EXTERIOR_LIGHTS"/>
+        <permission name="android.car.permission.CAR_EXTERIOR_ENVIRONMENT"/>
+        <permission name="android.car.permission.CONTROL_CAR_CLIMATE"/>
+        <permission name="android.car.permission.READ_CAR_DOOR"/>
+
+        <!-- ESO framework -->
+        <permission name="de.esolutions.android.framework.gateway.BIND_SERVICE_ADMIN_SERVICE"/>
+        <permission name="de.esolutions.fw.android.rsi.gateway.BIND_RSI_ADMIN"/>
+
+    </privapp-permissions>
+</permissions>
