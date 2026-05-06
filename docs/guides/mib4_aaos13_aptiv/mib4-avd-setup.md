@@ -294,6 +294,11 @@ pkill -f "emulator.*Scylla_AVD"
   ```bash
   pkill -9 -f qemu; rm -f ~/.android/avd/Scylla_AVD.avd/*.lock
   ```
+- **scrcpy windows invisible (macOS)**: after many rapid spawn/kill cycles, macOS WindowServer accumulates stale window entries and stops rendering new scrcpy windows (`OnScreen=false` in `CGWindowListCopyWindowInfo`). The windows exist but are never composited on screen. **Fix:** restart the Mac to clear WindowServer state. To avoid the issue, minimize rapid scrcpy respawn cycles — kill all instances cleanly before relaunching:
+  ```bash
+  pkill -f scrcpy; sleep 2
+  # then relaunch
+  ```
 
 ---
 
