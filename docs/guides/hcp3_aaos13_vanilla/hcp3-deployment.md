@@ -127,24 +127,70 @@ Once configured, `./gradlew :app:assembleHcp3HwMockDebug` will sign with the OEM
 
 ## System App vs User App
 
-The Data Collector declares `FLAG_SINGLE_USER` on its service and requires privileged Car API permissions. These can only be held when the app is installed as a **system privileged app** (`/system/priv-app/`). A regular `adb install` to `/data/app/` will not work — the service fails to start with a `SecurityException` even if `pm grant` appears to succeed, because privileged permissions are only evaluated for apps in priv-app directories.
+The Data Collector declares `FLAG_SINGLE_USER` on its service and requires privileged Car API permissions.
 
-> **Why `pm grant` fails here:** `pm grant` can only grant `runtime` (dangerous) permissions. `INTERACT_ACROSS_USERS` and all Car API permissions are `privileged` or `signature|privileged` — the package manager ignores `pm grant` for these unless the app is already in a priv-app directory.
+### Platform Signing — No Remount Needed
 
-### On the vanilla AAOS 13 emulator (`hcp3MockDebug`)
+When the APK is signed with the same platform key as the system image, Android **automatically grants** all `signature`-level permissions at install time — regardless of install location. This means:
+
+- **No `/system/priv-app/` needed** — `adb install -r` is sufficient
+- **No `adb remount` needed** — system partition stays read-only
+- **No bootloader unlock needed** — works on locked devices
+
+Permissions auto-granted by platform signature include:
+- `DUMP` — `ApplicationStartInfo` for other apps
+- `INTERACT_ACROSS_USERS_FULL` — cross-user activity monitoring
+- `PACKAGE_USAGE_STATS` — usage statistics
+- `READ_LOGS` — system-wide logcat access
+
+Verify after install:
+
+```bash
+adb shell pm dump com.porsche.aaos.platform.telemetry | grep -E "DUMP|READ_LOGS|PACKAGE_USAGE|INTERACT_ACROSS"
+```
+
+All should show `granted=true`.
+
+### When You Still Need Remount / priv-app
+
+The signing approach does **not** cover:
+- `android:sharedUserId="android.uid.system"` — running as UID 1000 requires priv-app placement
+- Surviving factory resets — user-installed apps are wiped on reset
+- `privileged`-only permissions that lack the `signature` flag (rare)
+
+### Deployment Summary
+
+| Target | Key | Install | Remount? |
+|---|---|---|---|
+| HCP3 vanilla emulator | `aosp-platform.jks` | `adb install -r` | No |
+| HCP3 real hardware | `hcp3-platform.jks` | `adb install -r` | No |
+
+Both use `adb install -r` with the correctly-signed APK. The remount + priv-app approach is a fallback for cases listed above.
+
+### Remount Fallback (priv-app placement)
+
+If priv-app placement is needed (see above), use the steps below.
+
+#### On the vanilla AAOS 13 emulator (`hcp3MockDebug`)
 
 Push the APK to `/system/priv-app/` using `adb remount`. This requires the emulator to be started with `-writable-system` (see [hcp3-avd-setup.md](hcp3-avd-setup.md)). A companion `privapp-permissions` XML must also be pushed to declare every privileged permission; a missing entry causes `system_server` to crash on boot.
 
-See the **Installing on the Emulator** section below for the full step-by-step procedure.
-
-### On real HCP3 hardware (`hcp3HwMockDebug` / `hcp3HwRealRelease`)
+#### On real HCP3 hardware (`hcp3HwMockDebug` / `hcp3HwRealRelease`)
 
 The `hcp3Hw` APK is signed with the OEM platform key from `platform.zip` (see Platform Key Setup above). On an engineering build with `adb root` access:
 
-| Option | How | When to use |
-|--------|-----|-------------|
-| **`adb install`** | Direct install with OEM-signed APK | Engineering builds with `ro.debuggable=1` |
-| **ADB push to `/system/priv-app/`** | `adb root` + `adb remount` | Full privileges, survives reboot |
+```bash
+adb root
+adb remount
+adb shell mkdir -p /system/priv-app/DataCollector
+adb push app/build/outputs/apk/hcp3HwMock/debug/app-hcp3Hw-mock-debug.apk \
+    /system/priv-app/DataCollector/DataCollector.apk
+adb push docs/guides/hcp3_aaos13_vanilla/privapp-permissions-datacollector.xml \
+    /system/etc/permissions/privapp-permissions-datacollector.xml
+adb reboot
+```
+
+> **Note:** This fallback is NOT required for normal development. Use `adb install -r` with the platform-signed APK instead.
 
 ## Installing on the Emulator
 
@@ -258,24 +304,33 @@ adb devices
 
 If multiple devices are connected, add `-s <serial>` to all subsequent commands.
 
-### Direct install (engineering builds with `adb root`)
+### Direct install (recommended)
 
 ```bash
 adb install -r app/build/outputs/apk/hcp3HwMock/debug/app-hcp3Hw-mock-debug.apk
 ```
 
-The `hcp3Hw` APK is signed with the OEM platform key, so signature-level permissions are granted automatically by the package manager.
+The `hcp3Hw` APK is signed with the OEM platform key (`hcp3-platform.jks`), so signature-level permissions are granted automatically by the package manager. No `adb root` or `adb remount` required.
 
-### System app installation via ADB push (full privileges, survives reboot)
+Verify permissions are granted:
 
-If the HCP3 engineering build allows `adb root` and a writable `/system`:
+```bash
+adb shell pm dump com.porsche.aaos.platform.telemetry | grep -E "DUMP|INTERACT_ACROSS|PACKAGE_USAGE"
+```
+
+### System app installation via ADB push (fallback — survives factory reset)
+
+Only needed if the app must persist across factory resets or requires `sharedUserId`. On an engineering build with `adb root` access:
 
 ```bash
 adb root
 adb remount
+adb shell mkdir -p /system/priv-app/DataCollector
 adb push app/build/outputs/apk/hcp3HwMock/debug/app-hcp3Hw-mock-debug.apk \
   /system/priv-app/DataCollector/DataCollector.apk
 adb shell chmod 644 /system/priv-app/DataCollector/DataCollector.apk
+adb push docs/guides/hcp3_aaos13_vanilla/privapp-permissions-datacollector.xml \
+  /system/etc/permissions/privapp-permissions-datacollector.xml
 adb reboot
 ```
 
@@ -293,7 +348,7 @@ A platform-signed app will show `SYSTEM` in `pkgFlags`. A user-installed app wil
 
 ## Troubleshooting
 
-- **`SecurityException: Component requests FLAG_SINGLE_USER but app does not hold INTERACT_ACROSS_USERS`**: The APK is installed as a user app (via `adb install`), not as a priv-app. Follow the priv-app push steps above. `pm grant` does not work for privileged permissions.
+- **`SecurityException: Component requests FLAG_SINGLE_USER but app does not hold INTERACT_ACROSS_USERS`**: The APK is not signed with the platform key. Verify the signing certificate matches the system image's platform cert (see Verifying Platform Signing). If using the vanilla emulator, ensure the build uses `aosp-platform.jks`. If on hardware, ensure `hcp3-platform.jks` is configured.
 - **`remount failed` / `Permission denied`**: The emulator was not started with `-writable-system`. Kill it and relaunch with that flag (see [hcp3-avd-setup.md](hcp3-avd-setup.md)).
 - **`IllegalStateException: Signature|privileged permissions not in privapp-permissions allowlist`**: The `privapp-permissions-datacollector.xml` is missing or incomplete. Push the updated file from `docs/guides/hcp3_aaos13_vanilla/privapp-permissions-datacollector.xml` and reboot. If you recently added a permission to `AndroidManifest.xml`, add it to the XML first.
 - **Emulator boot is stuck / boot animation runs for 3+ minutes after first priv-app push**: normal — PackageManager rescans all apps. Wait it out. If it never completes, check logcat for a `FATAL EXCEPTION IN SYSTEM PROCESS` which indicates the permissions XML is missing or malformed.

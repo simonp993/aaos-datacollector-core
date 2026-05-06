@@ -73,6 +73,79 @@ app/build/outputs/apk/mib4Mock/debug/app-mib4-mock-debug.apk
 
 The Data Collector requires **platform-level signing** to be granted system permissions at install time. Both debug and release builds are automatically signed with the AOSP test platform key via the `platform` signing config in the convention plugin (`datacollector.android-app`).
 
+### Why Signing Alone Is Sufficient (No Remount Needed)
+
+When an APK is signed with the same key as the system image, Android **automatically grants** all permissions declared with `protectionLevel="signature"` — regardless of install location. This means:
+
+- **No `/system/priv-app/` needed** — a user-installed APK signed with the platform key gets the same signature-level permissions as a pre-installed system app.
+- **No `adb remount` needed** — the system partition stays read-only.
+- **No bootloader unlock needed** — works even on locked bootloaders (like the Scylla emulator).
+
+Permissions auto-granted by platform signature include:
+- `DUMP` — required for `ApplicationStartInfo` of other apps
+- `INTERACT_ACROSS_USERS_FULL` — required for cross-user activity monitoring
+- `PACKAGE_USAGE_STATS` — required for usage statistics
+- `READ_LOGS` — required for system-wide logcat access
+
+Verify granted permissions after install:
+
+```bash
+adb shell pm dump com.porsche.aaos.platform.telemetry | grep -E "DUMP|READ_LOGS|PACKAGE_USAGE|INTERACT_ACROSS"
+```
+
+All should show `granted=true`.
+
+### When You Still Need Remount / priv-app
+
+The signing approach does **not** cover:
+- `android:sharedUserId="android.uid.system"` — running as UID 1000 requires priv-app placement
+- Surviving factory resets — user-installed apps are wiped
+- `privileged`-only permissions that lack the `signature` flag (very rare)
+
+### Emulator vs Hardware
+
+| | Scylla Emulator | MIB4 Hardware |
+|---|---|---|
+| Platform key | `aosp-platform.jks` (vanilla AOSP test key) | `aosp-platform.jks` (same vanilla AOSP key) |
+| Install method | `adb install -r` | `adb install -r` |
+| Remount possible | No (locked bootloader) | Yes (dev units have unlocked BL) |
+| Remount required | No | No |
+| Signature permissions | Auto-granted | Auto-granted |
+
+Both targets use the same AOSP test platform key and the same deployment command. The build output is directly installable on either target.
+
+### Hardware Remount Fallback
+
+If you need priv-app placement on real MIB4 hardware (e.g., for `sharedUserId` or persistence across factory resets):
+
+```bash
+# 1. Remount system partition (requires unlocked bootloader)
+adb root
+adb remount
+
+# 2. Push to priv-app
+adb shell mkdir -p /system/priv-app/DataCollector
+adb push app/build/outputs/apk/mib4Mock/debug/app-mib4-mock-debug.apk \
+    /system/priv-app/DataCollector/DataCollector.apk
+
+# 3. Add permissions whitelist (only if needed for privileged-only perms)
+adb shell "cat > /system/etc/permissions/privapp-permissions-datacollector.xml << 'EOF'
+<permissions>
+    <privapp-permissions package=\"com.porsche.aaos.platform.telemetry\">
+        <permission name=\"android.permission.DUMP\"/>
+        <permission name=\"android.permission.PACKAGE_USAGE_STATS\"/>
+        <permission name=\"android.permission.READ_LOGS\"/>
+        <permission name=\"android.permission.INTERACT_ACROSS_USERS_FULL\"/>
+    </privapp-permissions>
+</permissions>
+EOF"
+
+# 4. Reboot to pick up the new priv-app
+adb reboot
+```
+
+> **Note:** This is NOT required for normal development. Use `adb install -r` with the platform-signed APK instead. The remount approach is only needed for production-like deployment testing.
+
 To override, copy `keystore.properties.template` to `keystore.properties` at the repository root and fill in your values.
 
 Default (emulator) values:
