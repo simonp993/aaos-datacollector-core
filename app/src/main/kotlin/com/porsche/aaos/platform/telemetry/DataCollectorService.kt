@@ -52,15 +52,16 @@ class DataCollectorService : Service() {
      *   adb logcat | grep "DataCollector:LogTelemetry.*NetworkStatsCollector"  - Checked on emulator, TODO needs real device testing
      *   adb logcat | grep "DataCollector:LogTelemetry.*TouchInputCollector"    - Checked on emulator, TODO needs real device testing
      *   adb logcat | grep "DataCollector:LogTelemetry.*VehiclePropertyCollector" - TODO needs emulator + real device testing
+     *   adb logcat | grep "DataCollector:LogTelemetry.*MemoryCollector"        - TODO needs emulator + real device testing
+     *               TODO adb shell am send-trim-memory com.porsche.aaos.platform.telemetry RUNNING_MODERATE or RUNNING_LOW or RUNNING_CRITICAL (for testing, add later)
      *   adb logcat | grep "DataCollector:LogTelemetry.*MediaPlaybackCollector" - TODO needs emulator + real device testing -> Fix, weird payloads    
-     *   adb logcat | grep "DataCollector:LogTelemetry.*TimeChangeCollector"    - TODO needs emulator + real device testing -> Works, but a user manual change in the settings, had the trigger system on it
+     *   adb logcat | grep "DataCollector:LogTelemetry.*TimeChangeCollector"    - TODO needs emulator + real device testing -> Works, but a user manual change in the settings, had the trigger "system" on it, also no previous value
      *   adb logcat | grep "DataCollector:LogTelemetry.*CarInfoCollector"       - TODO needs emulator + real device testing -> empty metadata, no trigger
      *   adb logcat | grep "DataCollector:LogTelemetry.*ConnectivityCollector"  - TODO needs emulator + real device testing -> nothing yet
-     *   adb logcat | grep "DataCollector:LogTelemetry.*DriveStateCollector"    - TODO needs emulator + real device testing -> incorrect metadata, no trigger
-     *   adb logcat | grep "DataCollector:LogTelemetry.*MemoryCollector"        - TODO needs emulator + real device testing -> seems correct, no trigger
+     *   adb logcat | grep "DataCollector:LogTelemetry.*DriveStateCollector"    - TODO needs emulator + real device testing -> nothing 
      *   adb logcat | grep "DataCollector:LogTelemetry.*PackageCollector"       - TODO needs emulator + real device testing -> nothing yet
-     *   adb logcat | grep "DataCollector:LogTelemetry.*ProcessCollector"       - TODO needs emulator + real device testing -> polling to fast, always shows only the datacollector, no trigger. Should maybe be done on change or something, or accumulate the pids and send every 60s e.g.. Seems of low value and high traffic right now. How could value be increased?
-     *   adb logcat | grep "DataCollector:LogTelemetry.*SensorBatteryCollector" - TODO needs emulator + real device testing -> seems correct, no trigger
+     *   adb logcat | grep "DataCollector:LogTelemetry.*ProcessCollector"       - TODO needs emulator + real device testing -> nothing
+     *   adb logcat | grep "DataCollector:LogTelemetry.*SensorBatteryCollector" - TODO needs emulator + real device testing -> seems correct, to fast polling
      *   adb logcat | grep "DataCollector:LogTelemetry.*TelephonyCollector"     - TODO needs emulator + real device testing -> seems incorrect, no trigger
      *
      * Multiple collectors:
