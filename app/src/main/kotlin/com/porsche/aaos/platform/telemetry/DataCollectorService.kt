@@ -33,30 +33,32 @@ class DataCollectorService : Service() {
      * Set `true` to enable, `false` to disable.
      * Collectors not listed here default to **enabled**.
      *
+     * ── Logging architecture ───────────────────────────────────────────────────
+     * Each collector logs its own lifecycle/debug messages (e.g. DataCollector:AudioCollector).
+     * Additionally, every telemetry event is logged by the LogTelemetry sink
+     * (DataCollector:LogTelemetry) with the structured payload. This means each event
+     * appears twice in logcat: once from the collector, once from the telemetry sink.
+     *
      * ── Logcat commands ────────────────────────────────────────────────────────
      * All DataCollector logs (all collectors + service):
-     *   adb -s 172.16.250.248:5555 logcat | grep "\[DataCollector:"
+     *   adb logcat | grep "DataCollector:"
      *
      * All telemetry payloads only (LogTelemetry output):
-     *   adb -s 172.16.250.248:5555 logcat | grep "\[DataCollector:LogTelemetry\]"
+     *   adb logcat | grep "DataCollector:LogTelemetry"
      *
-     * Per-collector (lifecycle + telemetry payloads):
-     *   Audio:
-     *     adb -s 172.16.250.248:5555 logcat | grep "AudioCollector"
-     *   AppLifecycle:
-     *     adb -s 172.16.250.248:5555 logcat | grep "AppLifecycleCollector"
-     *   NetworkStats:
-     *     adb -s 172.16.250.248:5555 logcat | grep "NetworkStatsCollector"
-     *   MediaPlayback:
-     *     adb -s 172.16.250.248:5555 logcat | grep "MediaPlaybackCollector"
-     *   TouchInput:
-     *     adb -s 172.16.250.248:5555 logcat | grep "TouchInputCollector"
-     *   TimeChange:
-     *     adb -s 172.16.250.248:5555 logcat | grep "TimeChangeCollector"
-     *   VehicleProperty:
-     *     adb -s 172.16.250.248:5555 logcat | grep "VehiclePropertyCollector"
+     * Per-collector telemetry events only:
+     *   adb logcat | grep "DataCollector:LogTelemetry.*AudioCollector"
+     *   adb logcat | grep "DataCollector:LogTelemetry.*AppLifecycleCollector"
+     *   adb logcat | grep "DataCollector:LogTelemetry.*NetworkStatsCollector"
+     *   adb logcat | grep "DataCollector:LogTelemetry.*MediaPlaybackCollector"
+     *   adb logcat | grep "DataCollector:LogTelemetry.*TouchInputCollector"
+     *   adb logcat | grep "DataCollector:LogTelemetry.*TimeChangeCollector"
+     *   adb logcat | grep "DataCollector:LogTelemetry.*VehiclePropertyCollector"
      *
-     * Replace 172.16.250.248:5555 with emulator-5554 when using the emulator.
+     * Multiple collectors:
+     *   adb logcat | grep -E "DataCollector:LogTelemetry.*(AppLifecycle|MediaPlayback)"
+     *
+     * Add -s emulator-5554 or -s 172.16.250.248:5555 to target a specific device.
      * ──────────────────────────────────────────────────────────────────────────
      */
     private val collectorEnabled = mapOf(
