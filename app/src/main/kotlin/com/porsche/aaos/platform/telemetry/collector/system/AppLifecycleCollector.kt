@@ -1,5 +1,7 @@
 package com.porsche.aaos.platform.telemetry.collector.system
 
+import android.app.ActivityManager
+import android.app.ApplicationStartInfo
 import android.content.ComponentName
 import android.content.Context
 import com.porsche.aaos.platform.telemetry.collector.Collector
@@ -35,6 +37,11 @@ class AppLifecycleCollector @Inject constructor(
     override suspend fun start() {
         running = true
         logger.i(TAG, "Starting app lifecycle monitoring")
+
+        // Register ApplicationStartInfo listener for app startup times.
+        // Requires DUMP permission (platform-signed) to observe other apps' starts.
+        // TODO: Test on platform-signed build — will only report own app starts without DUMP.
+        registerStartInfoListener()
 
         // IActivityTaskManager.getAllRootTaskInfos() returns tasks for ALL users.
         // This is a @SystemApi — use reflection since our app is platform-signed.
@@ -80,6 +87,10 @@ class AppLifecycleCollector @Inject constructor(
                 }
 
                 // Detect changes: emit Paused for old, Resumed for new.
+                // Physical displays (0-3) are user-facing screens.
+                // Virtual displays (10, 24, etc.) are off-screen render targets
+                // (e.g. navigation map → IC compositor). Tracked separately as they
+                // indicate what content is ready for display, even if not currently routed.
                 val allDisplays = foregroundByDisplay.keys + currentForeground.keys
                 for (displayId in allDisplays) {
                     val previous = foregroundByDisplay[displayId]
@@ -87,10 +98,12 @@ class AppLifecycleCollector @Inject constructor(
 
                     if (previous == current) continue
 
+                    val displayType = if (displayId in PHYSICAL_DISPLAY_IDS) "physical" else "virtual"
+
                     if (previous != null) {
                         logger.d(
                             TAG,
-                            "Activity paused: display=$displayId" +
+                            "Activity paused: display=$displayId ($displayType)" +
                                 " pkg=${previous.packageName} cls=${previous.className}",
                         )
                         telemetry.send(
@@ -103,6 +116,7 @@ class AppLifecycleCollector @Inject constructor(
                                         "package" to previous.packageName,
                                         "class" to previous.className,
                                         "displayId" to displayId,
+                                        "displayType" to displayType,
                                     ),
                                 ),
                             ),
@@ -111,7 +125,7 @@ class AppLifecycleCollector @Inject constructor(
                     if (current != null) {
                         logger.d(
                             TAG,
-                            "Activity resumed: display=$displayId" +
+                            "Activity resumed: display=$displayId ($displayType)" +
                                 " pkg=${current.packageName} cls=${current.className}",
                         )
                         telemetry.send(
@@ -124,6 +138,7 @@ class AppLifecycleCollector @Inject constructor(
                                         "package" to current.packageName,
                                         "class" to current.className,
                                         "displayId" to displayId,
+                                        "displayType" to displayType,
                                     ),
                                 ),
                             ),
@@ -147,8 +162,96 @@ class AppLifecycleCollector @Inject constructor(
         logger.i(TAG, "Stopped")
     }
 
+    /**
+     * Registers an ApplicationStartInfo completion listener (API 35+).
+     * Reports app startup times with system-determined cold/warm/hot classification.
+     *
+     * Requires DUMP permission to observe other apps' starts (platform-signed).
+     * Without it, only reports our own process starts.
+     *
+     * TODO: Test on platform-signed build on real device.
+     *       Verify getHistoricalProcessStartReasons returns other apps' starts with DUMP.
+     *       Consider polling getHistoricalProcessStartReasons() periodically as fallback
+     *       if the listener doesn't fire for other apps.
+     */
+    @Suppress("TooGenericExceptionCaught")
+    private fun registerStartInfoListener() {
+        try {
+            val am = context.getSystemService(ActivityManager::class.java)
+
+            // Emit any historical starts since last boot (batch catchup).
+            val history = am.getHistoricalProcessStartReasons(MAX_START_INFO_HISTORY)
+            if (history.isNotEmpty()) {
+                logger.i(TAG, "ApplicationStartInfo: ${history.size} historical entries available")
+            }
+
+            // Register real-time listener for future app starts.
+            am.addApplicationStartInfoCompletionListener(
+                context.mainExecutor,
+            ) { startInfo -> emitStartInfo(startInfo) }
+            logger.i(TAG, "ApplicationStartInfo listener registered")
+        } catch (e: SecurityException) {
+            logger.w(TAG, "ApplicationStartInfo requires DUMP permission (platform-signed): ${e.message}")
+        } catch (e: Exception) {
+            logger.w(TAG, "ApplicationStartInfo not available: ${e.message}")
+        }
+    }
+
+    private fun emitStartInfo(startInfo: ApplicationStartInfo) {
+        val startType = when (startInfo.startType) {
+            ApplicationStartInfo.START_TYPE_COLD -> "cold"
+            ApplicationStartInfo.START_TYPE_WARM -> "warm"
+            ApplicationStartInfo.START_TYPE_HOT -> "hot"
+            else -> "unknown"
+        }
+        val reason = when (startInfo.reason) {
+            ApplicationStartInfo.START_REASON_LAUNCHER -> "launcher"
+            ApplicationStartInfo.START_REASON_SERVICE -> "service"
+            ApplicationStartInfo.START_REASON_BROADCAST -> "broadcast"
+            ApplicationStartInfo.START_REASON_CONTENT_PROVIDER -> "content_provider"
+            ApplicationStartInfo.START_REASON_BACKUP -> "backup"
+            ApplicationStartInfo.START_REASON_ALARM -> "alarm"
+            ApplicationStartInfo.START_REASON_PUSH -> "push"
+            else -> "other"
+        }
+
+        // Extract key timestamps (nanoseconds since boot → convert to millis).
+        val timestamps = startInfo.startupTimestamps
+        val launchMs = timestamps.entries
+            .filter { it.value > 0 }
+            .takeIf { it.isNotEmpty() }
+            ?.let { entries ->
+                val first = entries.minOf { it.value }
+                val last = entries.maxOf { it.value }
+                (last - first) / 1_000_000 // ns → ms
+            }
+
+        telemetry.send(
+            TelemetryEvent(
+                signalId = signalId,
+                payload = mapOf(
+                    "actionName" to "AppStart_TimeUntilStarted",
+                    "trigger" to "system",
+                    "metadata" to buildMap {
+                        put("package", startInfo.processName ?: "unknown")
+                        put("startType", startType)
+                        put("reason", reason)
+                        if (launchMs != null) put("durationMs", launchMs)
+                        put("pid", startInfo.pid)
+                    },
+                ),
+            ),
+        )
+        logger.d(TAG, "AppStart: ${startInfo.processName} ($startType/$reason) ${launchMs ?: "?"}ms")
+    }
+
     companion object {
         private const val TAG = "AppLifecycleCollector"
         private const val POLL_INTERVAL_MS = 500L
+        private const val MAX_START_INFO_HISTORY = 30
+
+        // Physical display IDs on Scylla (0=Center, 1=Instrument, 2=Passenger, 3=Rear).
+        // Virtual displays (10, 24, etc.) are off-screen render targets used by OEM services.
+        private val PHYSICAL_DISPLAY_IDS = setOf(0, 1, 2, 3)
     }
 }

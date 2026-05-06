@@ -290,6 +290,12 @@ pkill -f "emulator.*Scylla_AVD"
 - **Display 0 shows overlapping content in emulator window**: this is a known compositor bug with the Scylla HWC — use headless mode + scrcpy as described above
 - **Setup wizard / "Mark network" dialog blocking the screen after `-wipe-data`**: the OEM setup wizard launches on first boot. Follow [Step 5](#5-dismiss-the-oem-setup-wizard) to dismiss it programmatically
 - **Wrong display resolution**: run with `-wipe-data` once to clear cached display config
+- **WiFi disabled / NetworkStats returning 0s**: after a cold boot or `-wipe-data`, WiFi may be disabled (no icon in the status bar). Enable and connect manually:
+  ```bash
+  adb shell svc wifi enable
+  adb shell cmd wifi connect-network AndroidWifi open
+  ```
+  Verify with `adb shell dumpsys connectivity | grep "Active default"` — should show a network ID.
 - **`FATAL: Running multiple emulators with the same AVD`**: kill stale processes and remove lock files:
   ```bash
   pkill -9 -f qemu; rm -f ~/.android/avd/Scylla_AVD.avd/*.lock
