@@ -51,6 +51,7 @@ class DataCollectorService : Service() {
      *           make sure previous value and current exist, make sure all payloads or somewhat homogeneous, 
      *           check general implications of datacollector on the system power, maybe add dev and prod flavour for some signals,
      *           combine heartbeat and system?, Get turned on off state of displays? Make sure timestamps inside metadata have same format (epochSec)
+     *           add comments explaining payloads to all collectors. 
      * 
      *   adb logcat | grep "DataCollector:LogTelemetry.*AudioCollector"         - Checked on emulator, mute button not working, TODO needs real device testing
      *   adb logcat | grep "DataCollector:LogTelemetry.*AppLifecycleCollector"  - Checked on emulator, TODO needs real device testing
