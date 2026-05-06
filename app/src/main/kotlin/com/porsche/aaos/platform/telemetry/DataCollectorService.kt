@@ -47,6 +47,10 @@ class DataCollectorService : Service() {
      *   adb logcat | grep "DataCollector:LogTelemetry"
      *
      * Per-collector telemetry events only:
+     *   TODO: - make the events smaller with same information, make sure, that all events can be corelated, 
+     *           make sure previous value and current exist, make sure all payloads or somewhat homogeneous, 
+     *           check general implications of datacollector on the system power, maybe add dev and prod flavour for some signals
+     * 
      *   adb logcat | grep "DataCollector:LogTelemetry.*AudioCollector"         - Checked on emulator, mute button not working, TODO needs real device testing
      *   adb logcat | grep "DataCollector:LogTelemetry.*AppLifecycleCollector"  - Checked on emulator, TODO needs real device testing
      *   adb logcat | grep "DataCollector:LogTelemetry.*NetworkStatsCollector"  - Checked on emulator, TODO needs real device testing
