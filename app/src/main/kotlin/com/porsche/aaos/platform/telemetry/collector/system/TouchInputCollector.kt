@@ -237,6 +237,7 @@ class TouchInputCollector @Inject constructor(
                             "endY" to endEvent.y,
                             "durationMs" to durationMs,
                             "moveCount" to moveCount,
+                            "pointerCount" to endEvent.pointerCount,
                         ),
                     ),
                 ),

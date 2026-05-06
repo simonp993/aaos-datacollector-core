@@ -47,13 +47,21 @@ class DataCollectorService : Service() {
      *   adb logcat | grep "DataCollector:LogTelemetry"
      *
      * Per-collector telemetry events only:
-     *   adb logcat | grep "DataCollector:LogTelemetry.*AudioCollector" - Fully implemented and checked on emulator, mutebutton not working, TODO needs real device testing
-     *   adb logcat | grep "DataCollector:LogTelemetry.*AppLifecycleCollector" - Fully implemented and checked on emulator, TODO needs real device testing
-     *   adb logcat | grep "DataCollector:LogTelemetry.*NetworkStatsCollector" - Fully implemented and checked on emulator, TODO needs real device testing
-     *   adb logcat | grep "DataCollector:LogTelemetry.*MediaPlaybackCollector"
-     *   adb logcat | grep "DataCollector:LogTelemetry.*TouchInputCollector" - Fully implemented and checked on emulator, TODO needs real device testing
-     *   adb logcat | grep "DataCollector:LogTelemetry.*TimeChangeCollector"
-     *   adb logcat | grep "DataCollector:LogTelemetry.*VehiclePropertyCollector"
+     *   adb logcat | grep "DataCollector:LogTelemetry.*AudioCollector"         - Checked on emulator, mute button not working, TODO needs real device testing
+     *   adb logcat | grep "DataCollector:LogTelemetry.*AppLifecycleCollector"  - Checked on emulator, TODO needs real device testing
+     *   adb logcat | grep "DataCollector:LogTelemetry.*NetworkStatsCollector"  - Checked on emulator, TODO needs real device testing
+     *   adb logcat | grep "DataCollector:LogTelemetry.*MediaPlaybackCollector" - TODO needs emulator + real device testing
+     *   adb logcat | grep "DataCollector:LogTelemetry.*TouchInputCollector"    - Checked on emulator, TODO needs real device testing
+     *   adb logcat | grep "DataCollector:LogTelemetry.*TimeChangeCollector"    - TODO needs emulator + real device testing
+     *   adb logcat | grep "DataCollector:LogTelemetry.*VehiclePropertyCollector" - TODO needs emulator + real device testing
+     *   adb logcat | grep "DataCollector:LogTelemetry.*CarInfoCollector"       - TODO needs emulator + real device testing -> empty metadata, no trigger
+     *   adb logcat | grep "DataCollector:LogTelemetry.*ConnectivityCollector"  - TODO needs emulator + real device testing -> nothing yet
+     *   adb logcat | grep "DataCollector:LogTelemetry.*DriveStateCollector"    - TODO needs emulator + real device testing -> incorrect metadata, no trigger
+     *   adb logcat | grep "DataCollector:LogTelemetry.*MemoryCollector"        - TODO needs emulator + real device testing -> seems correct, no trigger
+     *   adb logcat | grep "DataCollector:LogTelemetry.*PackageCollector"       - TODO needs emulator + real device testing -> nothing yet
+     *   adb logcat | grep "DataCollector:LogTelemetry.*ProcessCollector"       - TODO needs emulator + real device testing (1s poll — high volume)
+     *   adb logcat | grep "DataCollector:LogTelemetry.*SensorBatteryCollector" - TODO needs emulator + real device testing -> polling to fast, or on change, always shows only the datacollector, no trigger
+     *   adb logcat | grep "DataCollector:LogTelemetry.*TelephonyCollector"     - TODO needs emulator + real device testing -> seems incorrect, no trigger
      *
      * Multiple collectors:
      *   adb logcat | grep -E "DataCollector:LogTelemetry.*(AppLifecycle|MediaPlayback)"
@@ -66,16 +74,16 @@ class DataCollectorService : Service() {
         "TouchInput" to true,
         "MediaPlayback" to true,
         "TimeChange" to true,
-        "AppLifecycle" to true, 
-        "CarInfo" to false,
-        "Connectivity" to false,
-        "DriveState" to false,
-        "Memory" to false,
+        "AppLifecycle" to true,
+        "CarInfo" to true,
+        "Connectivity" to true,
+        "DriveState" to true,
+        "Memory" to true,
         "NetworkStats" to true,
-        "Package" to false,
-        "Process" to false,
-        "SensorBattery" to false,
-        "Telephony" to false,
+        "Package" to true,
+        "Process" to true,
+        "SensorBattery" to true,
+        "Telephony" to true,
         "VehicleProperty" to true,
     )
 
