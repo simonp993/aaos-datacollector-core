@@ -42,22 +42,21 @@ class MemoryCollector @Inject constructor(
             activityManager.getMemoryInfo(memInfo)
             val totalMem = memInfo.totalMem
 
-            val samples = mutableListOf<Map<String, Any>>()
+            val samples = mutableListOf<List<Any>>()
             while (isActive) {
                 activityManager.getMemoryInfo(memInfo)
 
+                // Compact: [epochSec, availMb, trimLevel, lowMemory]
                 samples.add(
-                    mapOf(
-                        "timestamp" to Instant.now().toString(),
-                        "currentLevel" to (previousLevel?.let { trimLabel(it) } ?: "NONE"),
-                        "trimLevel" to (previousLevel ?: -1),
-                        "availMem" to memInfo.availMem,
-                        "availMb" to (memInfo.availMem / 1_048_576),
-                        "lowMemory" to memInfo.lowMemory,
+                    listOf(
+                        Instant.now().epochSecond,
+                        memInfo.availMem / 1_048_576,
+                        previousLevel ?: -1,
+                        if (memInfo.lowMemory) 1 else 0,
                     ),
                 )
 
-                if (samples.size >= 12) {
+                if (samples.size >= SAMPLES_PER_BATCH) {
                     telemetry.send(
                         TelemetryEvent(
                             signalId = signalId,
@@ -66,6 +65,7 @@ class MemoryCollector @Inject constructor(
                                 "trigger" to "system",
                                 "metadata" to mapOf(
                                     "totalMem" to totalMem,
+                                    "sampleSchema" to listOf("epochSec", "availMb", "trimLevel", "lowMemory"),
                                     "samples" to samples.toList(),
                                 ),
                             ),
@@ -74,7 +74,7 @@ class MemoryCollector @Inject constructor(
                     samples.clear()
                 }
 
-                delay(5_000)
+                delay(SAMPLE_INTERVAL_MS)
             }
         }
 
@@ -129,6 +129,8 @@ class MemoryCollector @Inject constructor(
 
     companion object {
         private const val TAG = "MemoryCollector"
+        private const val SAMPLE_INTERVAL_MS = 5_000L
+        private const val SAMPLES_PER_BATCH = 12
 
         private fun trimLabel(level: Int): String = when (level) {
             ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE -> "RUNNING_MODERATE"

@@ -34,6 +34,9 @@ class AppLifecycleCollector @Inject constructor(
     private val foregroundByDisplay = mutableMapOf<Int, ComponentName>()
     private var initialPollDone = false
 
+    // Tracks already-emitted ApplicationStartInfo entries (pid + uptimeMillis as key).
+    private val emittedStartInfoKeys = mutableSetOf<Long>()
+
     override suspend fun start() {
         running = true
         logger.i(TAG, "Starting app lifecycle monitoring")
@@ -166,32 +169,36 @@ class AppLifecycleCollector @Inject constructor(
      * Registers an ApplicationStartInfo completion listener (API 35+).
      * Reports app startup times with system-determined cold/warm/hot classification.
      *
-     * Requires DUMP permission to observe other apps' starts (platform-signed).
-     * Without it, only reports our own process starts.
-     *
-     * TODO: Test on platform-signed build on real device.
-     *       Verify getHistoricalProcessStartReasons returns other apps' starts with DUMP.
-     *       Consider polling getHistoricalProcessStartReasons() periodically as fallback
-     *       if the listener doesn't fire for other apps.
+     * Uses the public getHistoricalProcessStartReasons(maxNum) API which returns
+     * only the calling process's starts. Emits historical entries on init and
+     * registers a real-time listener for future starts.
      */
     @Suppress("TooGenericExceptionCaught")
     private fun registerStartInfoListener() {
         try {
             val am = context.getSystemService(ActivityManager::class.java)
 
-            // Emit any historical starts since last boot (batch catchup).
             val history = am.getHistoricalProcessStartReasons(MAX_START_INFO_HISTORY)
             if (history.isNotEmpty()) {
-                logger.i(TAG, "ApplicationStartInfo: ${history.size} historical entries available")
+                logger.i(TAG, "ApplicationStartInfo: ${history.size} historical entries")
+                history.forEach { info ->
+                    emittedStartInfoKeys.add(startInfoKey(info))
+                    emitStartInfo(info)
+                }
             }
 
             // Register real-time listener for future app starts.
             am.addApplicationStartInfoCompletionListener(
                 context.mainExecutor,
-            ) { startInfo -> emitStartInfo(startInfo) }
+            ) { startInfo ->
+                val key = startInfoKey(startInfo)
+                if (emittedStartInfoKeys.add(key)) {
+                    emitStartInfo(startInfo)
+                }
+            }
             logger.i(TAG, "ApplicationStartInfo listener registered")
         } catch (e: SecurityException) {
-            logger.w(TAG, "ApplicationStartInfo requires DUMP permission (platform-signed): ${e.message}")
+            logger.w(TAG, "ApplicationStartInfo requires DUMP permission: ${e.message}")
         } catch (e: Exception) {
             logger.w(TAG, "ApplicationStartInfo not available: ${e.message}")
         }
@@ -215,34 +222,36 @@ class AppLifecycleCollector @Inject constructor(
             else -> "other"
         }
 
-        // Extract key timestamps (nanoseconds since boot → convert to millis).
         val timestamps = startInfo.startupTimestamps
-        val launchMs = timestamps.entries
-            .filter { it.value > 0 }
-            .takeIf { it.isNotEmpty() }
-            ?.let { entries ->
-                val first = entries.minOf { it.value }
-                val last = entries.maxOf { it.value }
-                (last - first) / 1_000_000 // ns → ms
-            }
+        val durationMs = timestamps.values
+            .filter { it > 0 }
+            .takeIf { it.size >= 2 }
+            ?.let { values -> (values.max() - values.min()) / 1_000_000 }
+            ?: 0L
+
+        val processName = startInfo.processName ?: "unknown"
+        logger.d(TAG, "AppStart: $processName ($startType/$reason) ${durationMs}ms")
 
         telemetry.send(
             TelemetryEvent(
                 signalId = signalId,
                 payload = mapOf(
-                    "actionName" to "AppStart_TimeUntilStarted",
+                    "actionName" to "App_TimeUntilStarted",
                     "trigger" to "system",
-                    "metadata" to buildMap {
-                        put("package", startInfo.processName ?: "unknown")
-                        put("startType", startType)
-                        put("reason", reason)
-                        if (launchMs != null) put("durationMs", launchMs)
-                        put("pid", startInfo.pid)
-                    },
+                    "metadata" to mapOf(
+                        "package" to processName,
+                        "startType" to startType,
+                        "reason" to reason,
+                        "durationMs" to durationMs,
+                        "pid" to startInfo.pid,
+                    ),
                 ),
             ),
         )
-        logger.d(TAG, "AppStart: ${startInfo.processName} ($startType/$reason) ${launchMs ?: "?"}ms")
+    }
+
+    private fun startInfoKey(info: ApplicationStartInfo): Long {
+        return info.pid.toLong() * 1_000_000_000L + (info.startupTimestamps.values.minOrNull() ?: 0L)
     }
 
     companion object {
