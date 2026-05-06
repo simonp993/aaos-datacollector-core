@@ -24,34 +24,47 @@ class ProcessCollector @Inject constructor(
     @Volatile
     private var running = false
 
+    private var previousPids = emptySet<Int>()
+
     override suspend fun start() {
         running = true
-        logger.i(TAG, "Starting process monitoring")
+        logger.i(TAG, "Starting process monitoring (${POLL_INTERVAL_MS / 1_000}s interval, change-based)")
         val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
 
         while (running && coroutineContext.isActive) {
             val processes = activityManager.runningAppProcesses ?: emptyList()
-            val processList = processes.map { proc ->
-                mapOf(
-                    "pid" to proc.pid,
-                    "processName" to proc.processName,
-                    "importance" to proc.importance,
-                    "pkgList" to proc.pkgList?.toList(),
-                )
-            }
+            val currentPids = processes.map { it.pid }.toSet()
 
-            telemetry.send(
-                TelemetryEvent(
-                    signalId = signalId,
-                    payload = mapOf(
-                        "actionName" to "Process_ListPolled",
-                        "metadata" to mapOf(
-                            "count" to processes.size,
-                            "processes" to processList,
+            if (currentPids != previousPids) {
+                val added = currentPids - previousPids
+                val removed = previousPids - currentPids
+
+                val processList = processes.map { proc ->
+                    mapOf(
+                        "pid" to proc.pid,
+                        "processName" to proc.processName,
+                        "importance" to proc.importance,
+                        "pkgList" to proc.pkgList?.toList(),
+                    )
+                }
+
+                telemetry.send(
+                    TelemetryEvent(
+                        signalId = signalId,
+                        payload = mapOf(
+                            "actionName" to "Process_ListChanged",
+                            "trigger" to "system",
+                            "metadata" to mapOf(
+                                "count" to processes.size,
+                                "addedPids" to added.toList(),
+                                "removedPids" to removed.toList(),
+                                "processes" to processList,
+                            ),
                         ),
                     ),
-                ),
-            )
+                )
+                previousPids = currentPids
+            }
 
             delay(POLL_INTERVAL_MS)
         }
@@ -64,6 +77,6 @@ class ProcessCollector @Inject constructor(
 
     companion object {
         private const val TAG = "ProcessCollector"
-        private const val POLL_INTERVAL_MS = 1_000L
+        private const val POLL_INTERVAL_MS = 60_000L
     }
 }

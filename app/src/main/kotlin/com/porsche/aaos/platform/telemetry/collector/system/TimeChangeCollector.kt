@@ -37,6 +37,11 @@ class TimeChangeCollector @Inject constructor(
                     else -> return
                 }
 
+                val trigger = when (intent.action) {
+                    Intent.ACTION_TIME_CHANGED -> "user"
+                    else -> "system"
+                }
+
                 val now = Instant.now()
                 val zone = ZoneId.systemDefault()
 
@@ -45,7 +50,7 @@ class TimeChangeCollector @Inject constructor(
                         signalId = signalId,
                         payload = mapOf(
                             "actionName" to actionName,
-                            "trigger" to "system",
+                            "trigger" to trigger,
                             "metadata" to mapOf(
                                 "epochMillis" to now.toEpochMilli(),
                                 "iso8601" to DateTimeFormatter.ISO_OFFSET_DATE_TIME

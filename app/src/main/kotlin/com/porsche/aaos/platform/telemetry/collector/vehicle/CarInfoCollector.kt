@@ -34,6 +34,7 @@ class CarInfoCollector @Inject constructor(
                 signalId = signalId,
                 payload = mapOf(
                     "actionName" to "CarInfo_Collected",
+                    "trigger" to "system",
                     "metadata" to info,
                 ),
             ),

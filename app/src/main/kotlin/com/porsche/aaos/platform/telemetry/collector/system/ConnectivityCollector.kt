@@ -30,6 +30,7 @@ class ConnectivityCollector @Inject constructor(
                     signalId = signalId,
                     payload = mapOf(
                         "actionName" to "Connectivity_CapabilitiesChanged",
+                        "trigger" to "system",
                         "metadata" to mapOf(
                             "hasWifi" to capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI),
                             "hasCellular" to capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR),
@@ -44,12 +45,26 @@ class ConnectivityCollector @Inject constructor(
             )
         }
 
+        override fun onAvailable(network: Network) {
+            telemetry.send(
+                TelemetryEvent(
+                    signalId = signalId,
+                    payload = mapOf(
+                        "actionName" to "Connectivity_NetworkAvailable",
+                        "trigger" to "system",
+                        "metadata" to mapOf("network" to network.toString()),
+                    ),
+                ),
+            )
+        }
+
         override fun onLost(network: Network) {
             telemetry.send(
                 TelemetryEvent(
                     signalId = signalId,
                     payload = mapOf(
                         "actionName" to "Connectivity_NetworkLost",
+                        "trigger" to "system",
                         "metadata" to mapOf("network" to network.toString()),
                     ),
                 ),
@@ -62,9 +77,7 @@ class ConnectivityCollector @Inject constructor(
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         connectivityManager = cm
 
-        val request = NetworkRequest.Builder()
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .build()
+        val request = NetworkRequest.Builder().build()
         cm.registerNetworkCallback(request, networkCallback)
     }
 

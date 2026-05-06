@@ -147,6 +147,7 @@ class MediaPlaybackCollector @Inject constructor(
                     "metadata" to mapOf(
                         "package" to controller.packageName,
                         "state" to (state?.state ?: PlaybackState.STATE_NONE),
+                        "stateLabel" to playbackStateLabel(state?.state),
                         "position" to (state?.position ?: 0L),
                     ),
                 ),
@@ -171,6 +172,22 @@ class MediaPlaybackCollector @Inject constructor(
                 ),
             ),
         )
+    }
+
+    private fun playbackStateLabel(state: Int?): String = when (state) {
+        PlaybackState.STATE_NONE -> "NONE"
+        PlaybackState.STATE_STOPPED -> "STOPPED"
+        PlaybackState.STATE_PAUSED -> "PAUSED"
+        PlaybackState.STATE_PLAYING -> "PLAYING"
+        PlaybackState.STATE_FAST_FORWARDING -> "FAST_FORWARDING"
+        PlaybackState.STATE_REWINDING -> "REWINDING"
+        PlaybackState.STATE_BUFFERING -> "BUFFERING"
+        PlaybackState.STATE_ERROR -> "ERROR"
+        PlaybackState.STATE_CONNECTING -> "CONNECTING"
+        PlaybackState.STATE_SKIPPING_TO_PREVIOUS -> "SKIPPING_TO_PREVIOUS"
+        PlaybackState.STATE_SKIPPING_TO_NEXT -> "SKIPPING_TO_NEXT"
+        PlaybackState.STATE_SKIPPING_TO_QUEUE_ITEM -> "SKIPPING_TO_QUEUE_ITEM"
+        else -> "UNKNOWN($state)"
     }
 
     companion object {

@@ -44,6 +44,7 @@ class PackageCollector @Inject constructor(
                         signalId = signalId,
                         payload = mapOf(
                             "actionName" to actionName,
+                            "trigger" to "system",
                             "metadata" to mapOf("package" to packageName),
                         ),
                     ),
@@ -87,6 +88,7 @@ class PackageCollector @Inject constructor(
                     signalId = signalId,
                     payload = mapOf(
                         "actionName" to "Package_InventoryCollected",
+                        "trigger" to "system",
                         "metadata" to mapOf(
                             "count" to packages.size,
                             "packages" to packageList,

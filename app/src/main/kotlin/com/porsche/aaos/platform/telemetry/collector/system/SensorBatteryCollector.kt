@@ -77,6 +77,7 @@ class SensorBatteryCollector @Inject constructor(
                         signalId = signalId,
                         payload = mapOf(
                             "actionName" to "Sensor_${action}Changed",
+                            "trigger" to "system",
                             "metadata" to mapOf(
                                 "values" to event.values.toList(),
                                 "accuracy" to event.accuracy,
@@ -107,6 +108,7 @@ class SensorBatteryCollector @Inject constructor(
                     signalId = signalId,
                     payload = mapOf(
                         "actionName" to "Battery_StatePolled",
+                        "trigger" to "system",
                         "metadata" to mapOf(
                             "level" to if (scale > 0) (level * 100 / scale) else -1,
                             "charging" to (status == BatteryManager.BATTERY_STATUS_CHARGING),

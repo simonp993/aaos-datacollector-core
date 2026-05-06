@@ -17,6 +17,11 @@ object MockVehiclePlatformModule {
     @Singleton
     fun provideVhalPropertyService(): VhalPropertyService = FakeVhalPropertyService().apply {
         runBlocking {
+            // Vehicle Info (static)
+            emit(VhalPropertyIds.INFO_VIN, "WP0ZZZ99ZRS123456")
+            emit(VhalPropertyIds.INFO_MAKE, "Porsche")
+            emit(VhalPropertyIds.INFO_MODEL, "Taycan")
+            emit(VhalPropertyIds.INFO_MODEL_YEAR, 2026)
             emit(VhalPropertyIds.PORSCHE_DIAG_MMTR_AVAILABLE, 1)
             // Driving / Powertrain
             emit(VhalPropertyIds.PERF_VEHICLE_SPEED, 0.0f)

@@ -46,8 +46,10 @@ class DriveStateCollector @Inject constructor(
                         signalId = signalId,
                         payload = mapOf(
                             "actionName" to "DriveState_SpeedChanged",
+                            "trigger" to "system",
                             "metadata" to mapOf(
                                 "speedMps" to speed,
+                                "speedKmh" to (speed * 3.6f),
                                 "moving" to (speed > 0f),
                             ),
                         ),
@@ -66,6 +68,7 @@ class DriveStateCollector @Inject constructor(
                         signalId = signalId,
                         payload = mapOf(
                             "actionName" to "DriveState_ParkingBrakeChanged",
+                            "trigger" to "system",
                             "metadata" to mapOf("parked" to parked),
                         ),
                     ),
