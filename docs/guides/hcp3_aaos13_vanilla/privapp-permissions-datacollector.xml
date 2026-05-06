@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Privileged-permission allowlist for com.porsche.aaos.platform.telemetry.
+  Push this file to /system/etc/permissions/ on any AOSP-based emulator or
+  engineering build that does not already have an OEM-provided allowlist.
+
+  IMPORTANT: Every privileged permission declared in AndroidManifest.xml must
+  be listed here. A missing entry causes PackageManagerService to throw
+  IllegalStateException at system_server startup, crashing the boot.
+
+  See docs/guides/hcp3_aaos13_vanilla/hcp3-deployment.md for push instructions.
+-->
+<permissions>
+    <privapp-permissions package="com.porsche.aaos.platform.telemetry">
+        <!-- System permissions -->
+        <permission name="android.permission.INTERACT_ACROSS_USERS"/>
+        <permission name="android.permission.INTERACT_ACROSS_USERS_FULL"/>
+        <permission name="android.permission.MEDIA_CONTENT_CONTROL"/>
+        <permission name="android.permission.READ_NETWORK_USAGE_HISTORY"/>
+        <permission name="android.permission.PACKAGE_USAGE_STATS"/>
+        <permission name="android.permission.MONITOR_INPUT"/>
+        <permission name="android.permission.DIAGNOSTIC"/>
+        <permission name="android.permission.MANAGE_ACTIVITY_TASKS"/>
+        <!-- Car permissions -->
+        <permission name="android.car.permission.CAR_SPEED"/>
+        <permission name="android.car.permission.CAR_INFO"/>
+        <permission name="android.car.permission.CAR_ENERGY"/>
+        <permission name="android.car.permission.CAR_DRIVING_STATE"/>
+        <permission name="android.car.permission.CAR_MEDIA"/>
+        <permission name="android.car.permission.CAR_CONTROL_AUDIO_VOLUME"/>
+        <permission name="android.car.permission.CAR_VENDOR_EXTENSION"/>
+        <permission name="android.car.permission.GET_CAR_VENDOR_CATEGORY_1"/>
+        <permission name="android.car.permission.CAR_POWERTRAIN"/>
+        <permission name="android.car.permission.CAR_DYNAMICS_STATE"/>
+        <permission name="android.car.permission.CAR_EXTERIOR_LIGHTS"/>
+        <permission name="android.car.permission.CAR_EXTERIOR_ENVIRONMENT"/>
+        <permission name="android.car.permission.CONTROL_CAR_CLIMATE"/>
+        <permission name="android.car.permission.READ_CAR_DOOR"/>
+    </privapp-permissions>
+</permissions>

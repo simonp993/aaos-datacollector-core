@@ -64,35 +64,47 @@ app/build/outputs/apk/hcp3HwMock/debug/app-hcp3Hw-mock-debug.apk
 
 The `hcp3Hw` variants are signed with the HCP3 OEM platform key. To configure it:
 
-### Step 1 — Convert `platform.zip` to a JKS keystore
+### Step 1 — Obtain the raw key files
 
-The zip contains two files: `platform.pk8` (PKCS#8 private key) and `platform.x509.pem` (certificate).
+The OEM key consists of two files that must be placed in `app/keystores/` (both are gitignored):
+
+| File | Description |
+|---|---|
+| `app/keystores/hcp3-platform.pk8` | PKCS#8 DER-encoded private key |
+| `app/keystores/hcp3-platform.x509.pem` | X.509 certificate |
+
+These may be distributed as a `platform.zip` archive. Extract them and place them as named above:
 
 ```bash
-# Extract the zip
 unzip platform.zip -d /tmp/hcp3-key
+cp /tmp/hcp3-key/platform.pk8   app/keystores/hcp3-platform.pk8
+cp /tmp/hcp3-key/platform.x509.pem app/keystores/hcp3-platform.x509.pem
+```
 
+### Step 2 — Convert to a JKS keystore
+
+```bash
 # Convert PKCS#8 private key + certificate to a PKCS#12 bundle
 openssl pkcs12 -export \
-  -inkey /tmp/hcp3-key/platform.pk8 \
-  -in /tmp/hcp3-key/platform.x509.pem \
-  -out /tmp/hcp3-platform.p12 \
+  -inkey app/keystores/hcp3-platform.pk8 \
+  -in    app/keystores/hcp3-platform.x509.pem \
+  -out   /tmp/hcp3-platform.p12 \
   -name platform \
   -passout pass:android
 
 # Import the PKCS#12 bundle into a JKS keystore
 keytool -importkeystore \
-  -srckeystore /tmp/hcp3-platform.p12 \
-  -srcstoretype PKCS12 \
-  -srcstorepass android \
-  -destkeystore app/keystores/hcp3-platform.jks \
+  -srckeystore   /tmp/hcp3-platform.p12 \
+  -srcstoretype  PKCS12 \
+  -srcstorepass  android \
+  -destkeystore  app/keystores/hcp3-platform.jks \
   -deststoretype JKS \
   -deststorepass android \
-  -destkeypass android \
+  -destkeypass   android \
   -alias platform
 ```
 
-> `app/keystores/hcp3-platform.jks` is gitignored. Do not commit it.
+> `app/keystores/hcp3-platform.jks`, `hcp3-platform.pk8`, and `hcp3-platform.x509.pem` are all gitignored. Do not commit them.
 
 ### Step 2 — Configure `keystore.properties`
 
@@ -115,26 +127,15 @@ Once configured, `./gradlew :app:assembleHcp3HwMockDebug` will sign with the OEM
 
 ## System App vs User App
 
-The Data Collector needs **platform-level signing** to hold Car API permissions. The options differ between emulator and real hardware.
+The Data Collector declares `FLAG_SINGLE_USER` on its service and requires privileged Car API permissions. These can only be held when the app is installed as a **system privileged app** (`/system/priv-app/`). A regular `adb install` to `/data/app/` will not work — the service fails to start with a `SecurityException` even if `pm grant` appears to succeed, because privileged permissions are only evaluated for apps in priv-app directories.
+
+> **Why `pm grant` fails here:** `pm grant` can only grant `runtime` (dangerous) permissions. `INTERACT_ACROSS_USERS` and all Car API permissions are `privileged` or `signature|privileged` — the package manager ignores `pm grant` for these unless the app is already in a priv-app directory.
 
 ### On the vanilla AAOS 13 emulator (`hcp3MockDebug`)
 
-The vanilla emulator (`sdk_gcar_arm64`) runs as `userdebug` with `adb root` available. The `hcp3` flavor signs with `aosp-platform.jks`. After `adb install`, force-grant the signature-level permissions via root shell:
+Push the APK to `/system/priv-app/` using `adb remount`. This requires the emulator to be started with `-writable-system` (see [hcp3-avd-setup.md](hcp3-avd-setup.md)). A companion `privapp-permissions` XML must also be pushed to declare every privileged permission; a missing entry causes `system_server` to crash on boot.
 
-```bash
-adb root
-# Grant INTERACT_ACROSS_USERS (needed for FLAG_SINGLE_USER on the service)
-adb shell pm grant com.porsche.aaos.platform.telemetry android.permission.INTERACT_ACROSS_USERS
-adb shell pm grant com.porsche.aaos.platform.telemetry android.permission.INTERACT_ACROSS_USERS_FULL
-```
-
-The Car API permissions (`android.car.permission.*`) must be granted the same way:
-
-```bash
-for perm in CAR_SPEED CAR_ENERGY CAR_INFO CAR_DRIVING_STATE CAR_MEDIA CAR_POWERTRAIN; do
-  adb shell pm grant com.porsche.aaos.platform.telemetry "android.car.permission.$perm"
-done
-```
+See the **Installing on the Emulator** section below for the full step-by-step procedure.
 
 ### On real HCP3 hardware (`hcp3HwMockDebug` / `hcp3HwRealRelease`)
 
@@ -147,43 +148,104 @@ The `hcp3Hw` APK is signed with the OEM platform key from `platform.zip` (see Pl
 
 ## Installing on the Emulator
 
-```bash
-adb -s emulator-5556 install -r app/build/outputs/apk/hcp3Mock/debug/app-hcp3-mock-debug.apk
-```
+The emulator must be started with `-writable-system` to allow pushing files to `/system/`. See [hcp3-avd-setup.md](hcp3-avd-setup.md) for the launch command.
 
-Or build and install in one step:
+### Step 1 — Remount the system partition
 
 ```bash
-./gradlew :app:installHcp3MockDebug
+adb -s emulator-5556 root
+adb -s emulator-5556 remount
 ```
 
-After install, run the permission grants shown in System App vs User App above.
+Expected output: `remount succeeded`. If you see `remount failed`, the emulator was not started with `-writable-system`.
+
+### Step 2 — Push the APK to priv-app
+
+```bash
+APK=app/build/outputs/apk/hcp3Mock/debug/app-hcp3-mock-debug.apk
+adb -s emulator-5556 shell mkdir -p /system/priv-app/DataCollector
+adb -s emulator-5556 push "$APK" /system/priv-app/DataCollector/DataCollector.apk
+```
+
+### Step 3 — Push the privapp-permissions allowlist
+
+Every privileged permission declared in `AndroidManifest.xml` must be listed in an allowlist XML or `system_server` will crash on boot. A pre-built XML is committed at `docs/guides/hcp3_aaos13_vanilla/privapp-permissions-datacollector.xml`:
+
+```bash
+adb -s emulator-5556 push \
+  docs/guides/hcp3_aaos13_vanilla/privapp-permissions-datacollector.xml \
+  /system/etc/permissions/privapp-permissions-datacollector.xml
+```
+
+> If you add new privileged permissions to `AndroidManifest.xml`, update that XML file and re-push it.
+
+### Step 4 — Uninstall any data/app version and reboot
+
+If the app was previously installed via `adb install`, remove it first to avoid a conflict:
+
+```bash
+adb -s emulator-5556 shell pm uninstall com.porsche.aaos.platform.telemetry 2>/dev/null || true
+adb -s emulator-5556 reboot
+```
+
+Wait for the emulator to finish booting (the first boot after a system partition change takes ~2–3 minutes as PackageManager rescans all apps):
+
+```bash
+adb -s emulator-5556 wait-for-device shell \
+  'while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 2; done; echo "Boot complete"'
+```
 
 ### Starting the Service
 
 ```bash
-adb shell am start-foreground-service \
+adb -s emulator-5556 shell am start-foreground-service \
   -n com.porsche.aaos.platform.telemetry/.DataCollectorService
 ```
 
 Stop it:
 
 ```bash
-adb shell am force-stop com.porsche.aaos.platform.telemetry
+adb -s emulator-5556 shell am force-stop com.porsche.aaos.platform.telemetry
 ```
 
 ### Verifying the Service
 
 ```bash
 # Check the process is running
-adb shell ps -A | grep telemetry
+adb -s emulator-5556 shell ps -A | grep telemetry
 
 # Check foreground service state
-adb shell dumpsys activity services com.porsche.aaos.platform.telemetry
+adb -s emulator-5556 shell dumpsys activity services com.porsche.aaos.platform.telemetry
 
 # Live telemetry log
-adb logcat -s DataCollector:*
+adb -s emulator-5556 logcat -s DataCollector:*
 ```
+
+### Updating the APK
+
+For subsequent deploys after the first install, a full reboot is not needed — just push the new APK and restart the service:
+
+```bash
+./gradlew :app:assembleHcp3MockDebug
+adb -s emulator-5556 root && adb -s emulator-5556 remount
+adb -s emulator-5556 push \
+  app/build/outputs/apk/hcp3Mock/debug/app-hcp3-mock-debug.apk \
+  /system/priv-app/DataCollector/DataCollector.apk
+adb -s emulator-5556 shell am force-stop com.porsche.aaos.platform.telemetry
+adb -s emulator-5556 shell am start-foreground-service \
+  -n com.porsche.aaos.platform.telemetry/.DataCollectorService
+```
+
+### Known Collector Limitations on Vanilla AAOS 13 Emulator
+
+The following collectors degrade gracefully on the vanilla SDK image — they log a warning and stop their thread without crashing the service:
+
+| Collector | Status | Reason |
+|---|---|---|
+| `TouchInputCollector` | Disabled | `InputManager.monitorGestureInput` is an internal API absent in the SDK image |
+| `MediaPlaybackCollector` | Partial | Cross-user session API (`getActiveSessionsForUser`) not available; falls back to 0 active sessions |
+
+All other collectors (`VehiclePropertyCollector`, `NetworkStatsCollector`, `AudioCollector`, etc.) function normally.
 
 ## Installing on Real HCP3 Hardware
 
@@ -231,9 +293,13 @@ A platform-signed app will show `SYSTEM` in `pkgFlags`. A user-installed app wil
 
 ## Troubleshooting
 
-- **`INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match`**: A different signing key was used for a previous install. Uninstall first: `adb uninstall com.porsche.aaos.platform.telemetry`, then reinstall.
-- **`SecurityException` for Car API calls**: the APK is running as a user app without Car permissions. See System App vs User App above.
-- **Service crashes on startup on real HCP3**: likely caused by `mib4Real` datasource JARs being absent on HCP3. Switch to `mib4Mock` build variant.
+- **`SecurityException: Component requests FLAG_SINGLE_USER but app does not hold INTERACT_ACROSS_USERS`**: The APK is installed as a user app (via `adb install`), not as a priv-app. Follow the priv-app push steps above. `pm grant` does not work for privileged permissions.
+- **`remount failed` / `Permission denied`**: The emulator was not started with `-writable-system`. Kill it and relaunch with that flag (see [hcp3-avd-setup.md](hcp3-avd-setup.md)).
+- **`IllegalStateException: Signature|privileged permissions not in privapp-permissions allowlist`**: The `privapp-permissions-datacollector.xml` is missing or incomplete. Push the updated file from `docs/guides/hcp3_aaos13_vanilla/privapp-permissions-datacollector.xml` and reboot. If you recently added a permission to `AndroidManifest.xml`, add it to the XML first.
+- **Emulator boot is stuck / boot animation runs for 3+ minutes after first priv-app push**: normal — PackageManager rescans all apps. Wait it out. If it never completes, check logcat for a `FATAL EXCEPTION IN SYSTEM PROCESS` which indicates the permissions XML is missing or malformed.
+- **`INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match`**: A different signing key was used for a previous install. Uninstall first: `adb -s emulator-5556 uninstall com.porsche.aaos.platform.telemetry`, then re-push.
+- **`SecurityException` for Car API calls on real hardware**: the APK is running as a user app without Car permissions. Push to `/system/priv-app/` as described above.
+- **Service crashes on startup on real HCP3**: likely caused by `mib4Real` datasource JARs being absent on HCP3. Switch to the `hcp3Mock` build variant.
 - **`adb: error: failed to get feature set`**: USB debugging is not enabled on the head unit. Enable it in the HCP3 developer settings or contact the platform team.
 - **`SDK location not found`**: create `local.properties` at the repository root with `sdk.dir` (see Environment Setup above).
 - **No emulator connected**: run `adb devices`. See [hcp3-avd-setup.md](hcp3-avd-setup.md) for emulator launch instructions.

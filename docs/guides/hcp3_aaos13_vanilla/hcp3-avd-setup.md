@@ -179,7 +179,7 @@ Ensure the adb daemon is running before launch:
 adb start-server
 ```
 
-Launch in headless mode (recommended — avoids compositor artifacts with the emulator window):
+### Standard launch (headless, read-only system)
 
 ```bash
 ~/Library/Android/sdk/emulator/emulator \
@@ -189,7 +189,20 @@ Launch in headless mode (recommended — avoids compositor artifacts with the em
   -gpu host &
 ```
 
-> Add `-wipe-data` on first launch or after `config.ini` changes to clear cached display state.
+### Launch with writable system partition
+
+Required when deploying Data Collector as a **system priv-app** (the only supported deployment mode). The `-writable-system` flag enables `adb remount`, which makes `/system` writable so the APK and permissions XML can be pushed:
+
+```bash
+~/Library/Android/sdk/emulator/emulator \
+  -avd HCP3_AVD \
+  -writable-system \
+  -no-snapshot-load \
+  -no-window \
+  -gpu host &
+```
+
+> Add `-wipe-data` on first launch or after `config.ini` changes to clear cached display state. This also resets the writable system overlay, so you will need to re-push the APK and permissions XML after a wipe.
 
 Wait for the device to finish booting:
 
