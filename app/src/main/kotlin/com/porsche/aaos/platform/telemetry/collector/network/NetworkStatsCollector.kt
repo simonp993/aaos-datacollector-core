@@ -58,6 +58,7 @@ class NetworkStatsCollector @Inject constructor(
                     signalId = signalId,
                     payload = mapOf(
                         "actionName" to "Network_WifiTotal",
+                        "trigger" to "heartbeat",
                         "metadata" to mapOf(
                             "rxBytes" to wifiBucket.rxBytes,
                             "txBytes" to wifiBucket.txBytes,
@@ -74,6 +75,7 @@ class NetworkStatsCollector @Inject constructor(
                     signalId = signalId,
                     payload = mapOf(
                         "actionName" to "Network_MobileTotal",
+                        "trigger" to "heartbeat",
                         "metadata" to mapOf(
                             "rxBytes" to mobileBucket.rxBytes,
                             "txBytes" to mobileBucket.txBytes,
@@ -100,10 +102,11 @@ class NetworkStatsCollector @Inject constructor(
                 while (summary.hasNextBucket()) {
                     summary.getNextBucket(bucket)
                     if (bucket.rxBytes > 0 || bucket.txBytes > 0) {
+                        val packages = pm.getPackagesForUid(bucket.uid)?.toList()
                         perApp.add(
                             mapOf(
                                 "uid" to bucket.uid,
-                                "packages" to pm.getPackagesForUid(bucket.uid)?.toList(),
+                                "packages" to (packages ?: SYSTEM_UID_NAMES[bucket.uid]?.let { listOf(it) }),
                                 "network" to label,
                                 "rxBytes" to bucket.rxBytes,
                                 "txBytes" to bucket.txBytes,
@@ -120,6 +123,7 @@ class NetworkStatsCollector @Inject constructor(
                     signalId = signalId,
                     payload = mapOf(
                         "actionName" to "Network_PerAppStats",
+                        "trigger" to "heartbeat",
                         "metadata" to mapOf("apps" to perApp),
                     ),
                 ),
@@ -135,6 +139,18 @@ class NetworkStatsCollector @Inject constructor(
         private val NETWORK_TYPES = listOf(
             ConnectivityManager.TYPE_WIFI to "wifi",
             ConnectivityManager.TYPE_MOBILE to "mobile",
+        )
+        private val SYSTEM_UID_NAMES = mapOf(
+            0 to "root",
+            1000 to "system",
+            1001 to "radio",
+            1010 to "wifi",
+            1013 to "mediaserver",
+            1020 to "mdnsr",
+            1021 to "dns",
+            1051 to "ntp",
+            1052 to "drm",
+            1073 to "networkstack",
         )
     }
 }

@@ -47,11 +47,11 @@ class DataCollectorService : Service() {
      *   adb logcat | grep "DataCollector:LogTelemetry"
      *
      * Per-collector telemetry events only:
-     *   adb logcat | grep "DataCollector:LogTelemetry.*AudioCollector"
-     *   adb logcat | grep "DataCollector:LogTelemetry.*AppLifecycleCollector"
-     *   adb logcat | grep "DataCollector:LogTelemetry.*NetworkStatsCollector"
+     *   adb logcat | grep "DataCollector:LogTelemetry.*AudioCollector" - Fully implemented and checked on emulator, mutebutton not working, TODO needs real device testing
+     *   adb logcat | grep "DataCollector:LogTelemetry.*AppLifecycleCollector" - Fully implemented and checked on emulator, TODO needs real device testing
+     *   adb logcat | grep "DataCollector:LogTelemetry.*NetworkStatsCollector" - Fully implemented and checked on emulator, TODO needs real device testing
      *   adb logcat | grep "DataCollector:LogTelemetry.*MediaPlaybackCollector"
-     *   adb logcat | grep "DataCollector:LogTelemetry.*TouchInputCollector"
+     *   adb logcat | grep "DataCollector:LogTelemetry.*TouchInputCollector" - Fully implemented and checked on emulator, TODO needs real device testing
      *   adb logcat | grep "DataCollector:LogTelemetry.*TimeChangeCollector"
      *   adb logcat | grep "DataCollector:LogTelemetry.*VehiclePropertyCollector"
      *
@@ -66,7 +66,7 @@ class DataCollectorService : Service() {
         "TouchInput" to true,
         "MediaPlayback" to true,
         "TimeChange" to true,
-        "AppLifecycle" to true,
+        "AppLifecycle" to true, 
         "CarInfo" to false,
         "Connectivity" to false,
         "DriveState" to false,

@@ -98,6 +98,7 @@ class AppLifecycleCollector @Inject constructor(
                                 signalId = signalId,
                                 payload = mapOf(
                                     "actionName" to "AppLifecycle_Paused",
+                                    "trigger" to "user",
                                     "metadata" to mapOf(
                                         "package" to previous.packageName,
                                         "class" to previous.className,
@@ -118,6 +119,7 @@ class AppLifecycleCollector @Inject constructor(
                                 signalId = signalId,
                                 payload = mapOf(
                                     "actionName" to "AppLifecycle_Resumed",
+                                    "trigger" to "user",
                                     "metadata" to mapOf(
                                         "package" to current.packageName,
                                         "class" to current.className,

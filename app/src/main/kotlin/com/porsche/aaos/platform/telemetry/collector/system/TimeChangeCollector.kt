@@ -45,6 +45,7 @@ class TimeChangeCollector @Inject constructor(
                         signalId = signalId,
                         payload = mapOf(
                             "actionName" to actionName,
+                            "trigger" to "system",
                             "metadata" to mapOf(
                                 "epochMillis" to now.toEpochMilli(),
                                 "iso8601" to DateTimeFormatter.ISO_OFFSET_DATE_TIME

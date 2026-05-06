@@ -83,6 +83,7 @@ class VehiclePropertyCollector @Inject constructor(
                                     signalId = signalId,
                                     payload = mapOf(
                                         "actionName" to "VHAL_${propertyName}_ValueChanged",
+                                        "trigger" to "system",
                                         "metadata" to mapOf(
                                             "propertyId" to propertyId,
                                             "property" to propertyName,

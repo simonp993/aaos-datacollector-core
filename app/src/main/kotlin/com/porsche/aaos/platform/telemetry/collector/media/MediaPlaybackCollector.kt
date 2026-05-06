@@ -143,6 +143,7 @@ class MediaPlaybackCollector @Inject constructor(
                 signalId = signalId,
                 payload = mapOf(
                     "actionName" to "Media_PlaybackStateChanged",
+                    "trigger" to "user",
                     "metadata" to mapOf(
                         "package" to controller.packageName,
                         "state" to (state?.state ?: PlaybackState.STATE_NONE),
@@ -160,6 +161,7 @@ class MediaPlaybackCollector @Inject constructor(
                 signalId = signalId,
                 payload = mapOf(
                     "actionName" to "Media_MetadataChanged",
+                    "trigger" to "user",
                     "metadata" to mapOf(
                         "package" to controller.packageName,
                         "title" to metadata.getString(android.media.MediaMetadata.METADATA_KEY_TITLE),

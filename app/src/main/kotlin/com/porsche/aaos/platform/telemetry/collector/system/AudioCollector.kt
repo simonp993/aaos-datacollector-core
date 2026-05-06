@@ -5,6 +5,8 @@ import android.car.media.CarAudioManager
 import android.content.Context
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.os.Handler
+import android.os.Looper
 import com.porsche.aaos.platform.telemetry.collector.Collector
 import com.porsche.aaos.platform.telemetry.core.logging.Logger
 import com.porsche.aaos.platform.telemetry.telemetry.Telemetry
@@ -35,6 +37,11 @@ class AudioCollector @Inject constructor(
 
     // Tracks the last emitted state to suppress duplicate emissions.
     private var lastEmittedState: Map<String, Any>? = null
+
+    // Debounce: collapse rapid volume changes into a single event.
+    private val debounceHandler = Handler(Looper.getMainLooper())
+    private var debounceRunnable: Runnable? = null
+    private var preChangeState: Map<String, Any>? = null
 
     // Maps groupIndex → primary context name from car_audio_configuration.xml
     private var groupContextNames: Map<Int, String> = emptyMap()
@@ -86,6 +93,24 @@ class AudioCollector @Inject constructor(
             logger.w(TAG, "Car audio not available, falling back to poll-only: ${e.message}")
         }
 
+        // Register mic mute callback for real-time detection
+        try {
+            audioManager.registerAudioDeviceCallback(
+                object : android.media.AudioDeviceCallback() {
+                    override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
+                        if (running) emitIfChanged(audioManager, carAudioManager)
+                    }
+                    override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
+                        if (running) emitIfChanged(audioManager, carAudioManager)
+                    }
+                },
+                debounceHandler,
+            )
+            logger.i(TAG, "Registered AudioDeviceCallback")
+        } catch (e: Exception) {
+            logger.w(TAG, "AudioDeviceCallback registration failed: ${e.message}")
+        }
+
         // Emit initial state once.
         emitIfChanged(audioManager, carAudioManager)
 
@@ -99,6 +124,9 @@ class AudioCollector @Inject constructor(
 
     override fun stop() {
         running = false
+        debounceRunnable?.let { debounceHandler.removeCallbacks(it) }
+        debounceRunnable = null
+        preChangeState = null
         volumeCallback?.let { cb ->
             carAudioManager?.unregisterCarVolumeCallback(cb)
         }
@@ -112,21 +140,92 @@ class AudioCollector @Inject constructor(
     private fun emitIfChanged(audioManager: AudioManager, cam: CarAudioManager?) {
         val metadata = buildAudioState(audioManager, cam)
         if (metadata == lastEmittedState) return
-        emitState(audioManager, cam)
+        scheduleDebounceEmit(audioManager, cam)
     }
 
-    private fun emitState(audioManager: AudioManager, cam: CarAudioManager?) {
-        val metadata = buildAudioState(audioManager, cam)
-        lastEmittedState = metadata
+    /**
+     * Debounce volume changes: captures the pre-change state on the first change,
+     * then waits [DEBOUNCE_MS] after the last change before emitting a single event
+     * with both previous and current volume state.
+     */
+    private fun scheduleDebounceEmit(audioManager: AudioManager, cam: CarAudioManager?) {
+        // Capture the state before this burst of changes started
+        if (preChangeState == null) {
+            preChangeState = lastEmittedState
+        }
+        // Cancel any pending emission and reschedule
+        debounceRunnable?.let { debounceHandler.removeCallbacks(it) }
+        val runnable = Runnable {
+            if (running) {
+                emitDebouncedState(audioManager, cam)
+            }
+        }
+        debounceRunnable = runnable
+        debounceHandler.postDelayed(runnable, DEBOUNCE_MS)
+    }
+
+    private fun emitDebouncedState(audioManager: AudioManager, cam: CarAudioManager?) {
+        val currentState = buildAudioState(audioManager, cam)
+        val previous = preChangeState
+        preChangeState = null
+        debounceRunnable = null
+        lastEmittedState = currentState
+
+        val metadata = currentState.toMutableMap()
+        if (previous != null) {
+            val diff = deepDiff(previous, currentState)
+            if (diff.isNotEmpty()) {
+                metadata["previousState"] = diff
+            }
+        }
         telemetry.send(
             TelemetryEvent(
                 signalId = signalId,
                 payload = mapOf(
                     "actionName" to "Audio_VolumeStateChanged",
+                    "trigger" to "user",
                     "metadata" to metadata,
                 ),
             ),
         )
+    }
+
+    private fun emitState(audioManager: AudioManager, cam: CarAudioManager?) {
+        val currentState = buildAudioState(audioManager, cam)
+        lastEmittedState = currentState
+        telemetry.send(
+            TelemetryEvent(
+                signalId = signalId,
+                payload = mapOf(
+                    "actionName" to "Audio_VolumeStateChanged",
+                    "trigger" to "heartbeat",
+                    "metadata" to currentState,
+                ),
+            ),
+        )
+    }
+
+    /**
+     * Deep diff: returns only the entries from [old] that differ from [current].
+     * For nested Maps, recurses to return only changed sub-keys.
+     */
+    @Suppress("UNCHECKED_CAST")
+    private fun deepDiff(old: Map<String, Any>, current: Map<String, Any>): Map<String, Any> {
+        val diff = mutableMapOf<String, Any>()
+        for ((key, oldValue) in old) {
+            val newValue = current[key]
+            if (oldValue == newValue) continue
+            if (oldValue is Map<*, *> && newValue is Map<*, *>) {
+                val subDiff = deepDiff(
+                    oldValue as Map<String, Any>,
+                    newValue as Map<String, Any>,
+                )
+                if (subDiff.isNotEmpty()) diff[key] = subDiff
+            } else {
+                diff[key] = oldValue
+            }
+        }
+        return diff
     }
 
     private fun buildAudioState(
@@ -157,10 +256,6 @@ class AudioCollector @Inject constructor(
         }
 
         val metadata = mutableMapOf<String, Any>(
-            "musicVolume" to audioManager.getStreamVolume(AudioManager.STREAM_MUSIC),
-            "ringVolume" to audioManager.getStreamVolume(AudioManager.STREAM_RING),
-            "alarmVolume" to audioManager.getStreamVolume(AudioManager.STREAM_ALARM),
-            "navVolume" to audioManager.getStreamVolume(AudioManager.STREAM_NOTIFICATION),
             "isMicMuted" to audioManager.isMicrophoneMute,
             "mode" to audioManager.mode,
             "outputDevices" to uniqueDevices,
@@ -248,6 +343,7 @@ class AudioCollector @Inject constructor(
         private const val TAG = "AudioCollector"
         private const val POLL_INTERVAL_MS = 10_000L
         private const val KEEP_ALIVE_MS = 60_000L
+        private const val DEBOUNCE_MS = 500L
         private const val MAX_DEVICES = 5
         private const val CAR_AUDIO_CONFIG_PATH = "/vendor/etc/car_audio_configuration.xml"
     }

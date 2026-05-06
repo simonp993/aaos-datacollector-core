@@ -149,6 +149,12 @@ class TouchInputCollector @Inject constructor(
         private val displayName: String,
     ) : InputEventReceiver(channel, looper) {
 
+        private var gestureStartX = 0f
+        private var gestureStartY = 0f
+        private var gestureStartTime = 0L
+        private var moveCount = 0
+        private var inGesture = false
+
         override fun onInputEvent(event: InputEvent) {
             try {
                 if (event is MotionEvent && running) {
@@ -160,27 +166,77 @@ class TouchInputCollector @Inject constructor(
         }
 
         private fun handleMotionEvent(event: MotionEvent) {
-            val actionName = when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> "DOWN"
-                MotionEvent.ACTION_MOVE -> "MOVE"
-                MotionEvent.ACTION_UP -> "UP"
-                MotionEvent.ACTION_POINTER_DOWN -> "POINTER_DOWN"
-                MotionEvent.ACTION_POINTER_UP -> "POINTER_UP"
-                MotionEvent.ACTION_CANCEL -> "CANCEL"
-                else -> return
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    gestureStartX = event.x
+                    gestureStartY = event.y
+                    gestureStartTime = event.eventTime
+                    moveCount = 0
+                    inGesture = true
+                    sendTouchEvent("TouchInput_DOWN", event)
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    moveCount++
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (inGesture && moveCount > 0) {
+                        sendSwipeSummary(event)
+                    }
+                    sendTouchEvent("TouchInput_UP", event)
+                    inGesture = false
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    if (inGesture && moveCount > 0) {
+                        sendSwipeSummary(event)
+                    }
+                    sendTouchEvent("TouchInput_CANCEL", event)
+                    inGesture = false
+                }
+                MotionEvent.ACTION_POINTER_DOWN -> {
+                    sendTouchEvent("TouchInput_POINTER_DOWN", event)
+                }
+                MotionEvent.ACTION_POINTER_UP -> {
+                    sendTouchEvent("TouchInput_POINTER_UP", event)
+                }
             }
+        }
 
+        private fun sendTouchEvent(actionName: String, event: MotionEvent) {
             telemetry.send(
                 TelemetryEvent(
                     signalId = signalId,
                     payload = mapOf(
-                        "actionName" to "TouchInput_${actionName}",
+                        "actionName" to actionName,
+                        "trigger" to "user",
                         "metadata" to mapOf(
                             "display" to displayName,
                             "displayId" to displayId,
                             "x" to event.x,
                             "y" to event.y,
                             "pointerCount" to event.pointerCount,
+                        ),
+                    ),
+                ),
+            )
+        }
+
+        private fun sendSwipeSummary(endEvent: MotionEvent) {
+            val durationMs = endEvent.eventTime - gestureStartTime
+            telemetry.send(
+                TelemetryEvent(
+                    signalId = signalId,
+                    payload = mapOf(
+                        "actionName" to "TouchInput_SWIPE",
+                        "trigger" to "user",
+                        "metadata" to mapOf(
+                            "display" to displayName,
+                            "displayId" to displayId,
+                            "startX" to gestureStartX,
+                            "startY" to gestureStartY,
+                            "endX" to endEvent.x,
+                            "endY" to endEvent.y,
+                            "durationMs" to durationMs,
+                            "moveCount" to moveCount,
                         ),
                     ),
                 ),
