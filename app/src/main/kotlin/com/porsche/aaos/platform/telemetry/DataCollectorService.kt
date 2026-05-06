@@ -49,13 +49,14 @@ class DataCollectorService : Service() {
      * Per-collector telemetry events only:
      *   TODO: - make the events smaller with same information, make sure, that all events can be corelated, 
      *           make sure previous value and current exist, make sure all payloads or somewhat homogeneous, 
-     *           check general implications of datacollector on the system power, maybe add dev and prod flavour for some signals
+     *           check general implications of datacollector on the system power, maybe add dev and prod flavour for some signals,
+     *           combine heartbeat and system?, Get turned on off state of displays? Make sure timestamps inside metadata have same format (epochSec)
      * 
      *   adb logcat | grep "DataCollector:LogTelemetry.*AudioCollector"         - Checked on emulator, mute button not working, TODO needs real device testing
      *   adb logcat | grep "DataCollector:LogTelemetry.*AppLifecycleCollector"  - Checked on emulator, TODO needs real device testing
      *   adb logcat | grep "DataCollector:LogTelemetry.*NetworkStatsCollector"  - Checked on emulator, TODO needs real device testing
      *   adb logcat | grep "DataCollector:LogTelemetry.*TouchInputCollector"    - Checked on emulator, TODO needs real device testing
-     *   adb logcat | grep "DataCollector:LogTelemetry.*VehiclePropertyCollector" - TODO needs emulator + real device testing
+     *   adb logcat | grep "DataCollector:LogTelemetry.*VehiclePropertyCollector" - TODO maybe change action name to VHAL parameters changed and batch changes since too many values are send, previous seems to be always null
      *   adb logcat | grep "DataCollector:LogTelemetry.*MemoryCollector"        - TODO needs emulator + real device testing
      *               TODO adb shell am send-trim-memory com.porsche.aaos.platform.telemetry RUNNING_MODERATE or RUNNING_LOW or RUNNING_CRITICAL (for testing, add later)
      *   adb logcat | grep "DataCollector:LogTelemetry.*MediaPlaybackCollector" - TODO needs emulator + real device testing -> Fix, weird payloads    
@@ -67,6 +68,7 @@ class DataCollectorService : Service() {
      *   adb logcat | grep "DataCollector:LogTelemetry.*ProcessCollector"       - TODO needs emulator + real device testing -> nothing
      *   adb logcat | grep "DataCollector:LogTelemetry.*SensorBatteryCollector" - TODO needs emulator + real device testing -> seems correct, to fast polling
      *   adb logcat | grep "DataCollector:LogTelemetry.*TelephonyCollector"     - TODO needs emulator + real device testing -> seems incorrect, no trigger
+     *   adb logcat | grep "DataCollector:LogTelemetry.*FrameRateCollector"     - TODO needs emulator + real device testing -> test if change of display state is logged, also check payload
      *
      * Multiple collectors:
      *   adb logcat | grep -E "DataCollector:LogTelemetry.*(AppLifecycle|MediaPlayback)"
@@ -90,6 +92,7 @@ class DataCollectorService : Service() {
         "SensorBattery" to true,
         "Telephony" to true,
         "VehicleProperty" to true,
+        "FrameRate" to true,
     )
 
     override fun onCreate() {
