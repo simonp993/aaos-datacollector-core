@@ -33,7 +33,12 @@ android {
         create("mib4") {
             dimension = "platform"
         }
-        create("nextgen") {
+        // hcp3: vanilla AAOS 13 emulator (aosp-platform.jks)
+        create("hcp3") {
+            dimension = "platform"
+        }
+        // hcp3Hw: real HCP3 hardware (hcp3-platform.jks, see hcp3-deployment.md)
+        create("hcp3Hw") {
             dimension = "platform"
         }
         create("mock") {
@@ -65,6 +70,21 @@ android {
             keyAlias = keystoreProperties.getProperty("keyAlias", "platform")
             keyPassword = keystoreProperties.getProperty("keyPassword", "android")
         }
+        // HCP3 real hardware platform key — configure via keystore.properties (hcp3.* keys).
+        // Falls back to aosp-platform.jks if hcp3.storeFile is not set (build succeeds;
+        // resulting APK will not install as privileged on real HCP3 hardware).
+        create("hcp3Platform") {
+            storeFile =
+                file(
+                    keystoreProperties.getProperty(
+                        "hcp3.storeFile",
+                        "${project.projectDir}/keystores/aosp-platform.jks",
+                    ),
+                )
+            storePassword = keystoreProperties.getProperty("hcp3.storePassword", "android")
+            keyAlias = keystoreProperties.getProperty("hcp3.keyAlias", "platform")
+            keyPassword = keystoreProperties.getProperty("hcp3.keyPassword", "android")
+        }
     }
 
     buildTypes {
@@ -86,6 +106,15 @@ android {
         unitTests.all {
             it.useJUnitPlatform()
         }
+    }
+}
+
+// Apply the HCP3 hardware signing config to all hcp3Hw variants.
+// The hcp3Platform signing config reads from hcp3.* keys in keystore.properties.
+val hcp3PlatformSigning = android.signingConfigs.getByName("hcp3Platform")
+androidComponents {
+    onVariants(selector().withFlavor("platform" to "hcp3Hw")) { variant ->
+        variant.signingConfig.setConfig(hcp3PlatformSigning)
     }
 }
 

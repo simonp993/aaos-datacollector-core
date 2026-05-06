@@ -263,7 +263,7 @@ scrcpy --display-id=3 --window-title="Rear Passenger Cluster"   --window-width=1
 
 ## 7. Deploy and Run the App
 
-See [scylla-emulator-deployment.md](scylla-emulator-deployment.md) for building, signing, installing, and launching the Sport Apps on the emulator.
+See [mib4-deployment.md](mib4-deployment.md) for building, signing, installing, and launching the app on the emulator.
 
 ## Shutdown
 
@@ -294,3 +294,74 @@ pkill -f "emulator.*Scylla_AVD"
   ```bash
   pkill -9 -f qemu; rm -f ~/.android/avd/Scylla_AVD.avd/*.lock
   ```
+
+---
+
+## Windows (WSL)
+
+The following notes cover running this guide on Windows with WSL (Windows Subsystem for Linux). The ARM64 steps above remain the primary guide; these notes describe only what differs.
+
+> **Important:** The Scylla OEM system image is ARM64 only — no x86_64 variant is distributed. On Windows, ARM64 emulator images run via Hyper-V with ARM translation (Windows 11, Android Emulator ≥ 33.1). Performance is acceptable but slower than native ARM on Apple Silicon.
+
+### SDK and tool paths in WSL
+
+Android Studio installs the SDK on the Windows filesystem. Reference it from WSL via the `/mnt/c` mount:
+
+```bash
+export ANDROID_HOME="/mnt/c/Users/$USER/AppData/Local/Android/Sdk"
+export JAVA_HOME="/mnt/c/Program Files/Android/Android Studio/jbr"
+export PATH="$PATH:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin"
+```
+
+Add these to `~/.bashrc` (WSL) to make them permanent.
+
+### Install scrcpy
+
+Install on the Windows side (not inside WSL):
+
+```powershell
+winget install Genymobile.scrcpy
+```
+
+Then run `scrcpy` commands from a Windows terminal (PowerShell or cmd), not from inside WSL.
+
+### Unzip the Scylla image
+
+Heredoc syntax works as-is in WSL bash. Alternatively, extract the ZIP using Windows Explorer or 7-Zip and copy the contents to the SDK `system-images` directory.
+
+### Launch the emulator
+
+The emulator must be started as a Windows process (not from within WSL) to use Hyper-V hardware acceleration. Open a Windows terminal (PowerShell or Git Bash) and run:
+
+```powershell
+& "$env:LOCALAPPDATA\Android\Sdk\emulator\emulator.exe" `
+  -avd Scylla_AVD `
+  -no-snapshot-load `
+  -no-window `
+  -gpu host
+```
+
+Alternatively, call the Windows executable from WSL:
+
+```bash
+"/mnt/c/Users/$USER/AppData/Local/Android/Sdk/emulator/emulator.exe" \
+  -avd Scylla_AVD -no-snapshot-load -no-window -gpu host &
+```
+
+> `-gpu host` on Windows uses Hyper-V WHPX. If you have HAXM installed, disable Hyper-V first — they conflict. To check: `bcdedit /enum | grep -i hypervisor` in an elevated PowerShell.
+
+### adb
+
+With WSL, `adb` commands work normally from within WSL once the emulator is running as a Windows process. If you see `cannot connect to daemon`, start the Windows adb server first:
+
+```bash
+"/mnt/c/Users/$USER/AppData/Local/Android/Sdk/platform-tools/adb.exe" start-server
+```
+
+### Kill / lock file cleanup
+
+```bash
+# From WSL:
+taskkill.exe /F /IM qemu-system-x86_64.exe 2>/dev/null
+rm -f ~/.android/avd/Scylla_AVD.avd/*.lock
+```

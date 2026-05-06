@@ -103,7 +103,7 @@ Then proceed to Step 3 to write `config.ini`.
 
 > **Why this step is needed here but not for Scylla/MIB4:** A vanilla AOSP SDK image ships with no AVD hardware profile of its own — `avdmanager` creates a minimal `config.ini` that often lacks display and GPU settings needed for stable AAOS boot. You need to overwrite it with the values below.
 >
-> The Scylla/MIB4 OEM system image ZIP ships its own `create_avd_config.sh` and `run_local_avd.sh` scripts that generate the correct `config.ini` for you, tuned to the MIB4 display layout and hardware features. The `local-avd-setup.md` guide writes those settings manually to make each option explicit, but in practice the Scylla scripts handle it automatically.
+> The Scylla/MIB4 OEM system image ZIP ships its own `create_avd_config.sh` and `run_local_avd.sh` scripts that generate the correct `config.ini` for you, tuned to the MIB4 display layout and hardware features. The `mib4-avd-setup.md` guide writes those settings manually to make each option explicit, but in practice the Scylla scripts handle it automatically.
 >
 > If you ever obtain an OEM Android 13 image for HCP3, check whether it ships similar scripts before overwriting its config.
 
@@ -246,3 +246,95 @@ pkill -f "emulator.*HCP3_AVD"
   ```bash
   pkill -9 -f qemu; rm -f ~/.android/avd/HCP3_AVD.avd/*.lock
   ```
+
+---
+
+## Windows (WSL)
+
+The following notes cover running this guide on Windows with WSL. The ARM64/macOS steps above remain the primary guide; these notes describe only what differs.
+
+### System image — use x86_64 for best performance
+
+On Intel/AMD hardware, use the x86_64 image instead of arm64. It runs natively via Hyper-V with no CPU translation and boots significantly faster:
+
+```bash
+"/mnt/c/Users/$USER/AppData/Local/Android/Sdk/cmdline-tools/latest/bin/sdkmanager.bat" \
+  "system-images;android-33;android-automotive-playstore;x86_64"
+```
+
+For `avdmanager` in Step 2, replace the `-k` flag:
+
+```bash
+# Option A with x86_64:
+avdmanager.bat create avd \
+  -n "HCP3_AVD" \
+  -k "system-images;android-33;android-automotive-playstore;x86_64" \
+  -d "automotive_1024p_landscape" \
+  --force <<< "no"
+```
+
+For `config.ini` in Step 3, change two values:
+
+```ini
+abi.type=x86_64
+hw.cpu.arch=x86_64
+image.sysdir.1=system-images/android-33/android-automotive-playstore/x86_64/
+```
+
+All other `config.ini` values remain the same.
+
+### SDK and tool paths in WSL
+
+```bash
+export ANDROID_HOME="/mnt/c/Users/$USER/AppData/Local/Android/Sdk"
+export JAVA_HOME="/mnt/c/Program Files/Android/Android Studio/jbr"
+export PATH="$PATH:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin"
+```
+
+Heredoc syntax (`cat > file << 'EOF'`) works as-is in WSL bash.
+
+### Launch the emulator from Windows
+
+The emulator must run as a Windows process to use Hyper-V hardware acceleration. Open a Windows terminal (PowerShell or Git Bash) and run:
+
+```powershell
+& "$env:LOCALAPPDATA\Android\Sdk\emulator\emulator.exe" `
+  -avd HCP3_AVD `
+  -no-snapshot-load `
+  -no-window `
+  -gpu host
+```
+
+Or from WSL directly:
+
+```bash
+"/mnt/c/Users/$USER/AppData/Local/Android/Sdk/emulator/emulator.exe" \
+  -avd HCP3_AVD -no-snapshot-load -no-window -gpu host &
+```
+
+> `-gpu host` on Windows uses Hyper-V WHPX (Windows Hypervisor Platform). HAXM and Hyper-V conflict — use one or the other. Hyper-V is recommended for Windows 11. To verify Hyper-V is active: run `systeminfo` in an elevated cmd and look for `Hyper-V Requirements: A hypervisor has been detected`.
+
+### adb from WSL
+
+`adb` commands work from WSL once the Windows emulator is running. If `adb devices` shows nothing, start the Windows adb server first:
+
+```bash
+"/mnt/c/Users/$USER/AppData/Local/Android/Sdk/platform-tools/adb.exe" start-server
+```
+
+### scrcpy
+
+Install on Windows (not inside WSL):
+
+```powershell
+winget install Genymobile.scrcpy
+```
+
+Run `scrcpy` commands from a Windows terminal.
+
+### Kill / lock file cleanup
+
+```bash
+taskkill.exe /F /IM qemu-system-x86_64.exe 2>/dev/null
+rm -f ~/.android/avd/HCP3_AVD.avd/*.lock
+```

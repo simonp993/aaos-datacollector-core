@@ -27,4 +27,7 @@ keystore.properties
 # AOSP platform key source files (only the JKS keystore is needed)
 *.pk8
 *.pem
+# OEM platform keystores — custom keys must not be committed.
+# aosp-platform.jks is the public AOSP test key and IS committed.
+app/keystores/hcp3-*.jks
 .java-version

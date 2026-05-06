@@ -2,7 +2,7 @@
 
 How to build and deploy an AAOS app to the Scylla (MIB4) emulator.
 
-> **Prerequisite:** The emulator must be set up and running. See [local-avd-setup.md](local-avd-setup.md) for initial setup, launch, and display attachment.
+> **Prerequisite:** The emulator must be set up and running. See [mib4-avd-setup.md](mib4-avd-setup.md) for initial setup, launch, and display attachment.
 
 ## System App vs User App
 
@@ -159,6 +159,43 @@ A platform-signed app will show `SYSTEM` in `pkgFlags`. A user-installed app wil
 - **`INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match`**: The APK is not signed with the platform key expected by the system image. Ensure the build uses the `platform` signing config from `aosp-platform.jks`.
 - **`INSTALL_FAILED_VERSION_DOWNGRADE`**: The APK's `versionCode` is lower than the pre-installed version. Increase `versionCode` in `app/build.gradle.kts`.
 - **`SDK location not found`**: Create `local.properties` at the repository root with `sdk.dir` (see Environment Setup above).
-- **No emulator connected**: Run `adb devices` to check. See [local-avd-setup.md](local-avd-setup.md) for emulator launch instructions.
+- **No emulator connected**: Run `adb devices` to check. See [mib4-avd-setup.md](mib4-avd-setup.md) for emulator launch instructions.
 - **App has no vehicle data on emulator**: The `mock` datasource uses stub data — this is expected. Use the `real` datasource build on hardware with a running VHAL.
 - **`SecurityException` in logs for Car API calls**: The APK is not recognised as a platform-signed app by the system. Verify the signing certificate matches (see Verifying APK Signature above).
+
+---
+
+## Windows (WSL)
+
+Build and install commands run without changes inside WSL. The only differences are paths and the `JAVA_HOME` value.
+
+### Environment setup in WSL
+
+```bash
+export JAVA_HOME="/mnt/c/Program Files/Android/Android Studio/jbr"
+export ANDROID_HOME="/mnt/c/Users/$USER/AppData/Local/Android/Sdk"
+```
+
+The repository can live on either the WSL filesystem or the Windows filesystem (`/mnt/c/...`). For build performance, keep it on the WSL filesystem.
+
+### Build
+
+No changes. Gradle runs inside WSL using the WSL `JAVA_HOME`:
+
+```bash
+export JAVA_HOME="/mnt/c/Program Files/Android/Android Studio/jbr"
+./gradlew :app:assembleMib4MockDebug
+```
+
+### Install and start
+
+`adb` commands work from WSL once the emulator is running as a Windows process (see [mib4-avd-setup.md](mib4-avd-setup.md) Windows section). All `adb install`, `adb shell am`, and `adb logcat` commands are identical.
+
+### Verify APK signature
+
+Replace the macOS path with the Windows SDK path in WSL:
+
+```bash
+"/mnt/c/Users/$USER/AppData/Local/Android/Sdk/build-tools/$(ls /mnt/c/Users/$USER/AppData/Local/Android/Sdk/build-tools/ | tail -1)/apksigner.bat" \
+  verify --print-certs app/build/outputs/apk/mib4Mock/debug/app-mib4-mock-debug.apk
+```
