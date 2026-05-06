@@ -53,9 +53,9 @@ class DataCollectorService : Service() {
      *           combine heartbeat and system?, Get turned on off state of displays? Make sure timestamps inside metadata have same format (epochSec)
      *           add comments explaining payloads to all collectors. Get the app startup times, make sure to have the FrameRate schema for efficiency if possible,
      *           document all action names somehow automatic, ensure that not all 60s cyclic things are send at the same time, maybe add some randomization to it, so they are more distributed over time.
-     * 
+     *          make sure all payloads query for all users (not only 0, but also 10) for example in the mapbox context (maybe look at coreservices solution and talk to benni).
      *   adb logcat | grep "DataCollector:LogTelemetry.*AudioCollector"         - Checked on emulator, mute button not working, TODO needs real device testing
-     *   adb logcat | grep "DataCollector:LogTelemetry.*AppLifecycleCollector"  - Checked on emulator, TODO needs real device testing, test for App_TimeUntilStarted
+     *   adb logcat | grep "DataCollector:LogTelemetry.*AppLifecycleCollector"  - Checked on emulator, TODO needs real device testing, app time until start up, is not possible at the moment, maybe for later with mathieu
      *   adb logcat | grep "DataCollector:LogTelemetry.*NetworkStatsCollector"  - Checked on emulator, TODO needs real device testing
      *   adb logcat | grep "DataCollector:LogTelemetry.*TouchInputCollector"    - Checked on emulator, TODO needs real device testing
      *   adb logcat | grep "DataCollector:LogTelemetry.*VehiclePropertyCollector" - TODO maybe change action name to VHAL parameters changed and batch changes since too many values are send, previous seems to be always null, i think they are on poll not on change, maybe it's possible to only send when a value changes. then send previous and current. Batch it if possible. So collect changes with timestamps for 60seconds and send all at once (same variable can appear multiple times). 
