@@ -153,13 +153,7 @@ def expand_samples(df: pd.DataFrame) -> pd.DataFrame:
 def _short_name(pkg: str) -> str:
     if not pkg or pkg == "nan" or pkg == "None":
         return "unknown"
-    parts = pkg.split(".")
-    if len(parts) >= 3:
-        last = parts[-1]
-        if last in ("porsche", "mib4"):
-            return parts[-2] if len(parts) > 2 else last
-        return last
-    return parts[-1] if parts else pkg
+    return pkg
 
 
 # ---------------------------------------------------------------------------
@@ -567,8 +561,8 @@ def update_dashboard(relayout_data, displays, apps, triggers, active_tab, zoom_d
     n_collectors = len(set(e.get("signalId", "").split(".")[-1] for e in events))
     n_sessions = len(set(e.get("_session") for e in events))
 
-    # Touch count
-    touch_count = sum(len(dfs.get(a, pd.DataFrame())) for a in ["Touch_Down", "Touch_Swipe"])
+    # Touch count (each Touch_Down = one interaction)
+    touch_count = len(dfs.get("Touch_Down", pd.DataFrame()))
     # App switches
     df_focus = dfs.get("App_FocusChanged", pd.DataFrame())
     app_switches = len(df_focus)
@@ -623,11 +617,15 @@ def sync_graph_zoom(relayout_list, current_zoom):
     if not triggered_id or not isinstance(triggered_id, dict):
         return no_update
 
-    idx = triggered_id.get("index")
-    if idx is None or idx >= len(relayout_list):
-        return no_update
+    # Find which position in relayout_list corresponds to the triggered graph.
+    # ctx.args_grouping[0] is a list of dicts with {"id": {...}, "value": ...}
+    # matching the ALL pattern. We must find the entry whose id matches triggered_id.
+    relayout = None
+    for item in ctx.args_grouping[0]:
+        if item["id"] == triggered_id:
+            relayout = item.get("value")
+            break
 
-    relayout = relayout_list[idx]
     if not relayout:
         return no_update
 
@@ -738,9 +736,9 @@ def _build_timeline_tab(events, dfs, displays, zoom_range=None):
         )
         children.append(_full(_timeline_graph(fig_app, 80 * n_disp + 120, zoom_range)))
 
-    # --- 2) Touch Rate (bars per 5s) ---
-    touch_actions = ["Touch_Down", "Touch_Swipe"]
-    touch_dfs_list = [dfs.get(a, pd.DataFrame()) for a in touch_actions if not dfs.get(a, pd.DataFrame()).empty]
+    # --- 2) Touch Rate (bars per 5s) — count only Touch_Down (one per interaction) ---
+    touch_dfs_list = [dfs.get("Touch_Down", pd.DataFrame())]
+    touch_dfs_list = [df for df in touch_dfs_list if not df.empty]
     if touch_dfs_list:
         all_touch = pd.concat(touch_dfs_list, ignore_index=True)
         if "datetime" in all_touch.columns and "displayId" in all_touch.columns:
@@ -1295,8 +1293,10 @@ def _build_app_usage_tab(dfs, displays, apps, zoom_range=None):
 
 
 def _build_touch_tab(dfs, displays, zoom_range=None):
-    touch_actions = ["Touch_Down", "Touch_Up", "Touch_Swipe"]
-    touch_dfs = [dfs.get(a, pd.DataFrame()) for a in touch_actions if not dfs.get(a, pd.DataFrame()).empty]
+    # Only Touch_Down: each interaction = exactly one Touch_Down;
+    # Touch_Swipe has no x/y coordinates, Touch_Up duplicates Touch_Down.
+    touch_dfs = [dfs.get("Touch_Down", pd.DataFrame())]
+    touch_dfs = [df for df in touch_dfs if not df.empty]
     if not touch_dfs:
         return html.P("No touch data available.", style={"color": "#888"})
 
@@ -1337,9 +1337,7 @@ def _build_touch_tab(dfs, displays, zoom_range=None):
     children.append(_full(_synced_graph(fig_touch_fps, 400, zoom_range)))
 
     # --- 2) Touch Heatmaps — one per row, fixed aspect ratio ---
-    heatmap_actions = ["Touch_Down", "Touch_Swipe"]
-    heatmap_dfs = [dfs.get(a, pd.DataFrame()) for a in heatmap_actions if not dfs.get(a, pd.DataFrame()).empty]
-    df_heatmap = pd.concat(heatmap_dfs, ignore_index=True) if heatmap_dfs else pd.DataFrame()
+    df_heatmap = dfs.get("Touch_Down", pd.DataFrame()).copy()
 
     # Filter heatmap data by zoom range if set
     if not df_heatmap.empty and zoom_range and "datetime" in df_heatmap.columns:
@@ -1348,7 +1346,7 @@ def _build_touch_tab(dfs, displays, zoom_range=None):
         df_heatmap = df_heatmap[(df_heatmap["datetime"] >= z_start) & (df_heatmap["datetime"] <= z_end)]
 
     if not df_heatmap.empty and "displayId" in df_heatmap.columns:
-        # Pre-compute global max bin count for shared color scale
+        # Pre-compute Gaussian KDE grids and shared color scale
         global_zmax = 0
         heatmap_data = []
         for did in sorted(displays):
@@ -1360,25 +1358,32 @@ def _build_touch_tab(dfs, displays, zoom_range=None):
             res = DISPLAY_RESOLUTIONS.get(did, (1920, 720))
             n = len(df_disp)
             bin_size = 80 if n < 50 else (40 if n < 200 else 20)
-            nbx = max(10, res[0] // bin_size)
-            nby = max(8, res[1] // bin_size)
-            h, _, _ = np.histogram2d(df_disp["x"].tolist(), df_disp["y"].tolist(),
-                                     bins=[nbx, nby],
-                                     range=[[0, res[0]], [0, res[1]]])
-            local_max = float(h.max()) if h.size > 0 else 0
+            cell = max(10, bin_size // 2)
+            gx = np.linspace(0, res[0], res[0] // cell + 1)
+            gy = np.linspace(0, res[1], res[1] // cell + 1)
+            GX, GY = np.meshgrid(gx, gy)
+            Z = np.zeros_like(GX, dtype=float)
+            sigma = bin_size * 1.2
+            two_sigma2 = 2.0 * sigma * sigma
+            for _, row in df_disp.iterrows():
+                tx, ty = row["x"], row["y"]
+                if pd.isna(tx) or pd.isna(ty):
+                    continue
+                Z += np.exp(-((GX - tx) ** 2 + (GY - ty) ** 2) / two_sigma2)
+            local_max = float(Z.max()) if Z.size > 0 else 0
             global_zmax = max(global_zmax, local_max)
-            heatmap_data.append((did, df_disp, res, n, bin_size, nbx, nby))
+            heatmap_data.append((did, res, n, gx, gy, Z))
 
-        for did, df_disp, res, n, bin_size, nbx, nby in heatmap_data:
+        for did, res, n, gx, gy, Z in heatmap_data:
             name = DISPLAY_NAMES.get(did, f"Display {did}")
             fig = go.Figure()
-            fig.add_trace(go.Histogram2d(
-                x=df_disp["x"].tolist(), y=df_disp["y"].tolist(),
-                nbinsx=nbx, nbinsy=nby,
+            fig.add_trace(go.Heatmap(
+                x=gx, y=gy, z=Z,
                 colorscale=[[0, "rgba(30,30,50,0)"], [0.15, "#4575b4"], [0.35, "#91bfdb"],
                             [0.5, "#fee090"], [0.7, "#fc8d59"], [1.0, "#d73027"]],
                 zsmooth="best",
                 zmin=0, zmax=global_zmax if global_zmax > 0 else None,
+                showscale=True,
             ))
             fig.add_shape(type="rect", x0=0, y0=0, x1=res[0], y1=res[1],
                           line=dict(color="#555", width=2))
@@ -1541,8 +1546,16 @@ def _build_network_tab(dfs, apps, zoom_range=None):
     df_perapp = dfs.get("Network_PerAppTraffic", pd.DataFrame())
     fig_perapp = go.Figure()
     if not df_perapp.empty and "apps" in df_perapp.columns:
-        app_totals = defaultdict(lambda: {"rx": 0, "tx": 0})
-        for _, row in df_perapp.iterrows():
+        # Filter by zoom range if set
+        df_pa = df_perapp
+        if zoom_range and "datetime" in df_pa.columns:
+            z_start = pd.to_datetime(zoom_range[0])
+            z_end = pd.to_datetime(zoom_range[1])
+            df_pa = df_pa[(df_pa["datetime"] >= z_start) & (df_pa["datetime"] <= z_end)]
+
+        # rxBytes/txBytes are already per-interval deltas from the collector — just sum them
+        app_traffic_rows = []
+        for _, row in df_pa.sort_values("timestamp").iterrows():
             apps_data = row.get("apps", [])
             if not apps_data:
                 continue
@@ -1553,25 +1566,29 @@ def _build_network_tab(dfs, apps, zoom_range=None):
                 label = pkgs[0] if pkgs else f"uid:{a.get('uid', 0)}"
                 if apps and label not in apps:
                     continue
-                app_totals[label]["rx"] = max(app_totals[label]["rx"], a.get("rxBytes", 0))
-                app_totals[label]["tx"] = max(app_totals[label]["tx"], a.get("txBytes", 0))
+                app_traffic_rows.append({"app": label,
+                                         "rx": a.get("rxBytes", 0), "tx": a.get("txBytes", 0)})
 
-        traffic_data = []
-        for label, data in app_totals.items():
-            rx_mb = data["rx"] / (1024 * 1024)
-            tx_mb = data["tx"] / (1024 * 1024)
-            if rx_mb + tx_mb > 0.001:
-                traffic_data.append({"App": _short_name(label), "RX (MB)": rx_mb, "TX (MB)": tx_mb})
-        if traffic_data:
-            df_t = pd.DataFrame(traffic_data).sort_values("RX (MB)", ascending=True)
-            fig_perapp.add_trace(go.Bar(y=df_t["App"], x=df_t["RX (MB)"], name="RX",
-                                        orientation="h", marker_color="#0f9b8e"))
-            fig_perapp.add_trace(go.Bar(y=df_t["App"], x=df_t["TX (MB)"], name="TX",
-                                        orientation="h", marker_color="#5b8def"))
-            fig_perapp.update_layout(title="Per-App Traffic (MB)", barmode="group",
-                                     height=max(300, len(df_t) * 45), xaxis_title="MB")
+        if app_traffic_rows:
+            df_at = pd.DataFrame(app_traffic_rows)
+            app_sums = df_at.groupby("app")[["rx", "tx"]].sum()
 
-    children.append(_row(_synced_graph(fig_traffic, 350, zoom_range), _graph(fig_perapp, max(350, len(app_totals) * 40))))
+            traffic_data = []
+            for label in app_sums.index:
+                rx_mb = app_sums.loc[label, "rx"] / (1024 * 1024)
+                tx_mb = app_sums.loc[label, "tx"] / (1024 * 1024)
+                if rx_mb + tx_mb > 0.001:
+                    traffic_data.append({"App": _short_name(label), "RX (MB)": rx_mb, "TX (MB)": tx_mb})
+            if traffic_data:
+                df_t = pd.DataFrame(traffic_data).sort_values("RX (MB)", ascending=True)
+                fig_perapp.add_trace(go.Bar(y=df_t["App"], x=df_t["RX (MB)"], name="RX",
+                                            orientation="h", marker_color="#0f9b8e"))
+                fig_perapp.add_trace(go.Bar(y=df_t["App"], x=df_t["TX (MB)"], name="TX",
+                                            orientation="h", marker_color="#5b8def"))
+                fig_perapp.update_layout(title="Per-App Traffic (MB)", barmode="group",
+                                         height=max(300, len(df_t) * 45), xaxis_title="MB")
+
+    children.append(_row(_synced_graph(fig_traffic, 350, zoom_range), _graph(fig_perapp, 350)))
 
     # App Lifecycle vs Network Traffic
     df_focus_lc = dfs.get("App_FocusChanged", pd.DataFrame())
