@@ -173,7 +173,7 @@ class TouchInputCollector @Inject constructor(
                     gestureStartTime = event.eventTime
                     moveCount = 0
                     inGesture = true
-                    sendTouchEvent("TouchInput_DOWN", event)
+                    sendTouchEvent("Touch_Down", event)
                 }
                 MotionEvent.ACTION_MOVE -> {
                     moveCount++
@@ -182,21 +182,21 @@ class TouchInputCollector @Inject constructor(
                     if (inGesture && moveCount > 0) {
                         sendSwipeSummary(event)
                     }
-                    sendTouchEvent("TouchInput_UP", event)
+                    sendTouchEvent("Touch_Up", event)
                     inGesture = false
                 }
                 MotionEvent.ACTION_CANCEL -> {
                     if (inGesture && moveCount > 0) {
                         sendSwipeSummary(event)
                     }
-                    sendTouchEvent("TouchInput_CANCEL", event)
+                    sendTouchEvent("Touch_Cancel", event)
                     inGesture = false
                 }
                 MotionEvent.ACTION_POINTER_DOWN -> {
-                    sendTouchEvent("TouchInput_POINTER_DOWN", event)
+                    sendTouchEvent("Touch_PointerDown", event)
                 }
                 MotionEvent.ACTION_POINTER_UP -> {
-                    sendTouchEvent("TouchInput_POINTER_UP", event)
+                    sendTouchEvent("Touch_PointerUp", event)
                 }
             }
         }
@@ -226,7 +226,7 @@ class TouchInputCollector @Inject constructor(
                 TelemetryEvent(
                     signalId = signalId,
                     payload = mapOf(
-                        "actionName" to "TouchInput_SWIPE",
+                        "actionName" to "Touch_Swipe",
                         "trigger" to "user",
                         "metadata" to mapOf(
                             "display" to displayName,

@@ -256,7 +256,7 @@ class NetworkStatsCollector @Inject constructor(
                 TelemetryEvent(
                     signalId = signalId,
                     payload = mapOf(
-                        "actionName" to "Network_PerAppStats",
+                        "actionName" to "Network_PerAppTraffic",
                         "trigger" to "heartbeat",
                         "metadata" to mapOf("apps" to perApp),
                     ),

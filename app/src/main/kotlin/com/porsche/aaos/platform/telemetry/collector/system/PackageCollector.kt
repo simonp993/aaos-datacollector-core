@@ -87,7 +87,7 @@ class PackageCollector @Inject constructor(
                 TelemetryEvent(
                     signalId = signalId,
                     payload = mapOf(
-                        "actionName" to "Package_InventoryCollected",
+                        "actionName" to "Package_Inventory",
                         "trigger" to "system",
                         "metadata" to mapOf(
                             "count" to packages.size,

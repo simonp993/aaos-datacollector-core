@@ -60,7 +60,7 @@ class MemoryCollector @Inject constructor(
                         TelemetryEvent(
                             signalId = signalId,
                             payload = mapOf(
-                                "actionName" to "Memory_LevelCurrent",
+                                "actionName" to "Memory_Usage",
                                 "trigger" to "heartbeat",
                                 "metadata" to mapOf(
                                     "totalMem" to totalMem,
@@ -92,7 +92,7 @@ class MemoryCollector @Inject constructor(
                     TelemetryEvent(
                         signalId = signalId,
                         payload = mapOf(
-                            "actionName" to "Memory_LevelChanged",
+                            "actionName" to "Memory_PressureChanged",
                             "trigger" to "system",
                             "metadata" to mapOf(
                                 "previousLevel" to (prev?.let { trimLabel(it) } ?: "NONE"),

@@ -72,7 +72,7 @@ class TelephonyCollector @Inject constructor(
                         TelemetryEvent(
                             signalId = signalId,
                             payload = mapOf(
-                                "actionName" to "Telephony_SignalChanged",
+                                "actionName" to "Telephony_SignalStrengthChanged",
                                 "trigger" to "system",
                                 "metadata" to mapOf(
                                     "previous" to previousSignalLevel,
@@ -107,7 +107,7 @@ class TelephonyCollector @Inject constructor(
             TelemetryEvent(
                 signalId = signalId,
                 payload = mapOf(
-                    "actionName" to "Telephony_StateCollected",
+                    "actionName" to "Telephony_InitialState",
                     "trigger" to "system",
                     "metadata" to mapOf(
                         "simState" to tm.simState,

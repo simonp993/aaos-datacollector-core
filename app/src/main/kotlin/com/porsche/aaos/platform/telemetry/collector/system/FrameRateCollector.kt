@@ -143,7 +143,7 @@ class FrameRateCollector @Inject constructor(
                         TelemetryEvent(
                             signalId = signalId,
                             payload = mapOf(
-                                "actionName" to "FrameRate_Current",
+                                "actionName" to "Display_FrameRate",
                                 "trigger" to "heartbeat",
                                 "metadata" to mapOf(
                                     "sampleSchema" to listOf("timestampMillis", "frames", "dropped", "fps"),

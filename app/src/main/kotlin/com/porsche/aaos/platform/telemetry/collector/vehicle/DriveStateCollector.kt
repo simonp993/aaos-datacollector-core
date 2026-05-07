@@ -55,7 +55,7 @@ class DriveStateCollector @Inject constructor(
                     TelemetryEvent(
                         signalId = signalId,
                         payload = mapOf(
-                            "actionName" to "DriveState_SpeedChanged",
+                            "actionName" to "Vehicle_SpeedChanged",
                             "trigger" to "system",
                             "metadata" to mapOf(
                                 "previous" to previousSpeed,
@@ -79,7 +79,7 @@ class DriveStateCollector @Inject constructor(
                     TelemetryEvent(
                         signalId = signalId,
                         payload = mapOf(
-                            "actionName" to "DriveState_ParkingBrakeChanged",
+                            "actionName" to "Vehicle_ParkingBrakeChanged",
                             "trigger" to "system",
                             "metadata" to mapOf(
                                 "previous" to previousBrake,

@@ -29,9 +29,9 @@ class TimeChangeCollector @Inject constructor(
         val broadcastReceiver = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context, intent: Intent) {
                 val actionName = when (intent.action) {
-                    Intent.ACTION_TIME_CHANGED -> "TimeChange_ManualTimeSet"
-                    Intent.ACTION_TIMEZONE_CHANGED -> "TimeChange_TimezoneChanged"
-                    Intent.ACTION_DATE_CHANGED -> "TimeChange_DateChanged"
+                    Intent.ACTION_TIME_CHANGED -> "Time_ManualSet"
+                    Intent.ACTION_TIMEZONE_CHANGED -> "Time_TimezoneChanged"
+                    Intent.ACTION_DATE_CHANGED -> "Time_DateChanged"
                     else -> return
                 }
 

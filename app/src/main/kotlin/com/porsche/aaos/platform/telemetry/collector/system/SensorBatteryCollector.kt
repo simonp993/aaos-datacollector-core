@@ -132,7 +132,7 @@ class SensorBatteryCollector @Inject constructor(
             TelemetryEvent(
                 signalId = signalId,
                 payload = mapOf(
-                    "actionName" to "Battery_StatePolled",
+                    "actionName" to "Battery_Level",
                     "trigger" to "heartbeat",
                     "metadata" to mapOf(
                         "sampleSchema" to listOf(
@@ -157,7 +157,7 @@ class SensorBatteryCollector @Inject constructor(
                     TelemetryEvent(
                         signalId = signalId,
                         payload = mapOf(
-                            "actionName" to "Sensor_AccelerometerPolled",
+                            "actionName" to "Sensor_Accelerometer",
                             "trigger" to "heartbeat",
                             "metadata" to mapOf(
                                 "sampleSchema" to listOf("timestampMillis", "x", "y", "z"),
@@ -175,7 +175,7 @@ class SensorBatteryCollector @Inject constructor(
                     TelemetryEvent(
                         signalId = signalId,
                         payload = mapOf(
-                            "actionName" to "Sensor_GyroscopePolled",
+                            "actionName" to "Sensor_Gyroscope",
                             "trigger" to "heartbeat",
                             "metadata" to mapOf(
                                 "sampleSchema" to listOf("timestampMillis", "x", "y", "z"),
@@ -193,7 +193,7 @@ class SensorBatteryCollector @Inject constructor(
                     TelemetryEvent(
                         signalId = signalId,
                         payload = mapOf(
-                            "actionName" to "Sensor_AmbientLightPolled",
+                            "actionName" to "Sensor_AmbientLight",
                             "trigger" to "heartbeat",
                             "metadata" to mapOf(
                                 "sampleSchema" to listOf("timestampMillis", "lux"),

@@ -175,7 +175,7 @@ class AudioCollector @Inject constructor(
             TelemetryEvent(
                 signalId = signalId,
                 payload = mapOf(
-                    "actionName" to "Audio_VolumeStateChanged",
+                    "actionName" to "Audio_StateChanged",
                     "trigger" to "user",
                     "metadata" to mapOf(
                         "previous" to previous,
@@ -193,7 +193,7 @@ class AudioCollector @Inject constructor(
             TelemetryEvent(
                 signalId = signalId,
                 payload = mapOf(
-                    "actionName" to "Audio_VolumeStateChanged",
+                    "actionName" to "Audio_StateChanged",
                     "trigger" to "heartbeat",
                     "metadata" to mapOf(
                         "previous" to null,

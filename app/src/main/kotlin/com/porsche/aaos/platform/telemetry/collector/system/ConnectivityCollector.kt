@@ -50,7 +50,7 @@ class ConnectivityCollector @Inject constructor(
                 TelemetryEvent(
                     signalId = signalId,
                     payload = mapOf(
-                        "actionName" to "Connectivity_NetworkAvailable",
+                        "actionName" to "Connectivity_Available",
                         "trigger" to "system",
                         "metadata" to mapOf("network" to network.toString()),
                     ),
@@ -63,7 +63,7 @@ class ConnectivityCollector @Inject constructor(
                 TelemetryEvent(
                     signalId = signalId,
                     payload = mapOf(
-                        "actionName" to "Connectivity_NetworkLost",
+                        "actionName" to "Connectivity_Lost",
                         "trigger" to "system",
                         "metadata" to mapOf("network" to network.toString()),
                     ),

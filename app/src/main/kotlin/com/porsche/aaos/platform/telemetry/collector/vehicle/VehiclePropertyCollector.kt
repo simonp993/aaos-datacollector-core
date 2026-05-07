@@ -82,7 +82,7 @@ class VehiclePropertyCollector @Inject constructor(
                                 TelemetryEvent(
                                     signalId = signalId,
                                     payload = mapOf(
-                                        "actionName" to "VHAL_${propertyName}_ValueChanged",
+                                        "actionName" to "Vehicle_${propertyName}Changed",
                                         "trigger" to "system",
                                         "metadata" to mapOf(
                                             "propertyId" to propertyId,

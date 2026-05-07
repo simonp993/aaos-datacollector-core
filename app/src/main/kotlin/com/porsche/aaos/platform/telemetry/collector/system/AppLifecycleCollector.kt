@@ -116,7 +116,7 @@ class AppLifecycleCollector @Inject constructor(
                         TelemetryEvent(
                             signalId = signalId,
                             payload = mapOf(
-                                "actionName" to "AppLifecycle_FocusChanged",
+                                "actionName" to "App_FocusChanged",
                                 "trigger" to "user",
                                 "metadata" to mapOf(
                                     "previous" to previousMap,

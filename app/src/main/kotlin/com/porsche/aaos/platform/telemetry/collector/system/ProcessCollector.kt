@@ -52,7 +52,7 @@ class ProcessCollector @Inject constructor(
                     TelemetryEvent(
                         signalId = signalId,
                         payload = mapOf(
-                            "actionName" to "Process_ListChanged",
+                            "actionName" to "Process_Snapshot",
                             "trigger" to "heartbeat",
                             "metadata" to mapOf(
                                 "count" to processes.size,

@@ -155,7 +155,7 @@ class MediaPlaybackCollector @Inject constructor(
             TelemetryEvent(
                 signalId = signalId,
                 payload = mapOf(
-                    "actionName" to "Media_PlaybackStateChanged",
+                    "actionName" to "Media_PlaybackChanged",
                     "trigger" to "user",
                     "metadata" to mapOf(
                         "previous" to previous,
@@ -182,7 +182,7 @@ class MediaPlaybackCollector @Inject constructor(
             TelemetryEvent(
                 signalId = signalId,
                 payload = mapOf(
-                    "actionName" to "Media_MetadataChanged",
+                    "actionName" to "Media_TrackChanged",
                     "trigger" to "user",
                     "metadata" to mapOf(
                         "previous" to previous,

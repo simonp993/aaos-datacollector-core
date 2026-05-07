@@ -33,7 +33,7 @@ class CarInfoCollector @Inject constructor(
             TelemetryEvent(
                 signalId = signalId,
                 payload = mapOf(
-                    "actionName" to "CarInfo_Collected",
+                    "actionName" to "Vehicle_Info",
                     "trigger" to "system",
                     "metadata" to info,
                 ),
