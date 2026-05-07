@@ -139,8 +139,8 @@ class ConnectivityCollector @Inject constructor(
                             "sampleSchema" to listOf(
                                 "timestampMillis",
                                 "signalStrengthDbm",
-                                "downstreamBandwidthKbps",
-                                "upstreamBandwidthKbps",
+                                "maxDownstreamBandwidthKbps",
+                                "maxUpstreamBandwidthKbps",
                             ),
                             "samples" to samples.toList(),
                         ),

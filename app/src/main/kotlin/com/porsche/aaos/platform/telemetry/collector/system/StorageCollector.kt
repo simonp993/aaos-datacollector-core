@@ -57,7 +57,7 @@ class StorageCollector @Inject constructor(
                         "usedBytes" to usedBytes,
                         "availableBytes" to availableBytes,
                         "usagePercent" to if (totalBytes > 0) {
-                            (usedBytes * 100.0 / totalBytes)
+                            Math.round(usedBytes * 10000.0 / totalBytes) / 100.0
                         } else {
                             0.0
                         },
