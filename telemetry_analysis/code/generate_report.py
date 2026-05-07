@@ -39,12 +39,21 @@ DISPLAY_RESOLUTIONS = {
     3: (1280, 768),
 }
 
+# Consistent colors per display across ALL plots
+DISPLAY_COLORS = {
+    0: "#0f9b8e",  # Center Screen — teal
+    1: "#f39c12",  # Instrument Cluster — orange
+    2: "#5b8def",  # Passenger Screen — blue
+    3: "#9b59b6",  # Rear Passenger — purple
+}
+
 OUTPUT_DIR = Path(__file__).parent.parent / "output"
 
 
 def _figs_to_html(figs: list) -> str:
     """Convert list of plotly figures to HTML fragments (no plotly.js included)."""
     return "\n".join(pio.to_html(f, full_html=False, include_plotlyjs=False) for f in figs)
+
 
 # ---------------------------------------------------------------------------
 # Ingest
@@ -145,6 +154,19 @@ def expand_samples(df: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def _short_name(pkg: str) -> str:
+    """Get a readable short name from a package string."""
+    if not pkg or pkg == "nan" or pkg == "None":
+        return "unknown"
+    parts = pkg.split(".")
+    if len(parts) >= 3:
+        last = parts[-1]
+        if last in ("porsche", "mib4"):
+            return parts[-2] if len(parts) > 2 else last
+        return last
+    return parts[-1] if parts else pkg
+
+
 # ---------------------------------------------------------------------------
 # Section Builders
 # ---------------------------------------------------------------------------
@@ -154,7 +176,7 @@ def build_overview(events: list[dict], dfs: dict) -> str:
     """Section 1: Session overview."""
     figs = []
 
-    # Event count by collector
+    # Event count by collector — no color coding, larger height for labels
     collector_counts = defaultdict(int)
     for e in events:
         sig = e.get("signalId", "unknown").split(".")[-1]
@@ -169,13 +191,14 @@ def build_overview(events: list[dict], dfs: dict) -> str:
         y="Collector",
         orientation="h",
         title="Event Count by Collector",
-        color="Count",
-        color_continuous_scale="Viridis",
+        text="Count",
     )
-    fig.update_layout(height=400, showlegend=False)
+    fig.update_traces(marker_color="#0f9b8e")
+    fig.update_layout(height=max(400, len(df_counts) * 28), showlegend=False,
+                      yaxis=dict(tickfont=dict(size=11)), margin=dict(l=180))
     figs.append(fig)
 
-    # Event density heatmap (time × collector)
+    # Event density — line graph per collector grouped by 1 minute
     all_rows = []
     for e in events:
         sig = e.get("signalId", "unknown").split(".")[-1]
@@ -184,20 +207,48 @@ def build_overview(events: list[dict], dfs: dict) -> str:
             all_rows.append({"collector": sig, "datetime": pd.to_datetime(ts, unit="ms")})
     if all_rows:
         df_all = pd.DataFrame(all_rows)
-        df_all["time_bin"] = df_all["datetime"].dt.floor("30s")
+        df_all["time_bin"] = df_all["datetime"].dt.floor("1min")
         density = df_all.groupby(["time_bin", "collector"]).size().reset_index(name="count")
-        fig = px.density_heatmap(
+        fig = px.line(
             density,
             x="time_bin",
-            y="collector",
-            z="count",
-            title="Event Density Over Time (30s bins)",
-            color_continuous_scale="Hot",
+            y="count",
+            color="collector",
+            title="Event Rate Over Time (per minute)",
+            markers=True,
         )
-        fig.update_layout(height=500)
+        fig.update_layout(height=450, xaxis_title="Time", yaxis_title="Events / min")
         figs.append(fig)
 
-    # Session timeline
+    # Data volume per collector per minute (KB/min)
+    size_rows = []
+    for e in events:
+        sig = e.get("signalId", "unknown").split(".")[-1]
+        ts = e.get("timestamp")
+        if ts:
+            event_size = len(json.dumps(e, default=str))
+            size_rows.append({
+                "collector": sig,
+                "datetime": pd.to_datetime(ts, unit="ms"),
+                "bytes": event_size,
+            })
+    if size_rows:
+        df_size = pd.DataFrame(size_rows)
+        df_size["time_bin"] = df_size["datetime"].dt.floor("1min")
+        kb_per_min = df_size.groupby(["time_bin", "collector"])["bytes"].sum().reset_index()
+        kb_per_min["KB"] = kb_per_min["bytes"] / 1024
+        fig = px.line(
+            kb_per_min,
+            x="time_bin",
+            y="KB",
+            color="collector",
+            title="Data Volume per Collector (KB / minute)",
+            markers=True,
+        )
+        fig.update_layout(height=450, xaxis_title="Time", yaxis_title="KB / min")
+        figs.append(fig)
+
+    # Session timeline — single row, no color
     session_spans = []
     for e in events:
         session_spans.append({"session": e.get("_session"), "timestamp": e.get("timestamp")})
@@ -208,17 +259,20 @@ def build_overview(events: list[dict], dfs: dict) -> str:
         ).reset_index()
         session_summary["start_dt"] = pd.to_datetime(session_summary["start"], unit="ms")
         session_summary["end_dt"] = pd.to_datetime(session_summary["end"], unit="ms")
-        session_summary["duration_min"] = (session_summary["end"] - session_summary["start"]) / 60000
+        session_summary["duration"] = (
+            (session_summary["end"] - session_summary["start"]) / 60000
+        ).apply(lambda x: f"{x:.1f} min")
+        # Single row — they can't overlap
         fig = px.timeline(
             session_summary,
             x_start="start_dt",
             x_end="end_dt",
-            y="session",
+            y=["Sessions"] * len(session_summary),
             title="Session Timelines",
-            color="duration_min",
-            labels={"duration_min": "Duration (min)"},
+            text="duration",
         )
-        fig.update_layout(height=300)
+        fig.update_traces(marker_color="#0f9b8e")
+        fig.update_layout(height=200, showlegend=False)
         figs.append(fig)
 
     # Summary stats
@@ -238,115 +292,245 @@ def build_overview(events: list[dict], dfs: dict) -> str:
 
 
 def build_app_usage(dfs: dict) -> str:
-    """Section 2: App usage analysis."""
+    """Section 2: App usage — per display, ordered by frequency."""
     df = dfs.get("App_FocusChanged")
     if df is None or df.empty:
         return "<p>No App_FocusChanged data available.</p>"
 
     figs = []
 
-    # Extract package names
+    # Extract package and class names
     df["current_pkg"] = df.apply(
-        lambda r: str(r.get("current.package", r.get("current.packageName", "")) or ""), axis=1
+        lambda r: str(r.get("current.package", "") or ""), axis=1
     )
     df["previous_pkg"] = df.apply(
-        lambda r: str(r.get("previous.package", r.get("previous.packageName", "")) or ""), axis=1
+        lambda r: str(r.get("previous.package", "") or ""), axis=1
     )
-    df["display_id"] = df.get("current.displayId", df.get("displayId", 0))
-
-    # Filter to physical displays only (0-3)
-    df_physical = df[df.get("current.displayId", pd.Series([0] * len(df))).fillna(0).astype(int) < 10]
-
-    # App open frequency
-    pkg_counts = df_physical["current_pkg"].value_counts().reset_index()
-    pkg_counts.columns = ["Package", "Focus Count"]
-    # Shorten package names for display
-    pkg_counts["Short"] = pkg_counts["Package"].apply(lambda x: x.split(".")[-1] if x else "None")
-    fig = px.bar(
-        pkg_counts.head(15),
-        x="Focus Count",
-        y="Short",
-        orientation="h",
-        title="App Focus Frequency (Top 15)",
-        hover_data=["Package"],
+    df["current_class"] = df.apply(
+        lambda r: str(r.get("current.class", "") or ""), axis=1
     )
-    fig.update_layout(height=400)
-    figs.append(fig)
+    df["display_id"] = df.apply(
+        lambda r: int(r.get("current.displayId") or 0) if pd.notna(r.get("current.displayId")) else 0, axis=1
+    )
 
-    # Time-in-app calculation
-    df_sorted = df_physical.sort_values("datetime").reset_index(drop=True)
-    durations = []
-    for i in range(len(df_sorted) - 1):
-        pkg = str(df_sorted.iloc[i]["current_pkg"]) if pd.notna(df_sorted.iloc[i]["current_pkg"]) else ""
-        dur = (df_sorted.iloc[i + 1]["timestamp"] - df_sorted.iloc[i]["timestamp"]) / 1000
-        if dur < 3600:  # cap at 1 hour to ignore idle gaps
-            durations.append({"package": pkg, "duration_s": dur})
-    if durations:
-        df_dur = pd.DataFrame(durations)
-        app_time = df_dur.groupby("package")["duration_s"].sum().reset_index()
-        app_time["Short"] = app_time["package"].apply(lambda x: x.split(".")[-1] if x else "None")
-        app_time = app_time.sort_values("duration_s")
-        fig = px.bar(
-            app_time.tail(15),
-            x="duration_s",
-            y="Short",
-            orientation="h",
-            title="Time in App (seconds, Top 15)",
-            hover_data=["package"],
+    # Filter to physical displays (0-3)
+    df_physical = df[df["display_id"] < 10].copy()
+
+    # --- App Focus Frequency: ONE grouped bar chart, bars colored per screen ---
+    display_ids = sorted(df_physical["display_id"].unique())
+    all_focus_data = []
+    for did in display_ids:
+        df_disp = df_physical[df_physical["display_id"] == did]
+        if df_disp.empty:
+            continue
+        name = DISPLAY_NAMES.get(did, f"Display {did}")
+        pkg_counts = df_disp["current_pkg"].value_counts().reset_index()
+        pkg_counts.columns = ["Package", "Focus Count"]
+        pkg_counts["Short"] = pkg_counts["Package"].apply(_short_name)
+        pkg_counts["Display"] = name
+        pkg_counts["display_id"] = did
+        # Filter out unknowns (empty package)
+        pkg_counts = pkg_counts[pkg_counts["Short"] != "unknown"]
+        all_focus_data.append(pkg_counts)
+
+    if all_focus_data:
+        df_focus_all = pd.concat(all_focus_data, ignore_index=True)
+        fig = go.Figure()
+        for did in display_ids:
+            name = DISPLAY_NAMES.get(did, f"Display {did}")
+            color = DISPLAY_COLORS.get(did, "#888888")
+            df_d = df_focus_all[df_focus_all["display_id"] == did]
+            if df_d.empty:
+                continue
+            fig.add_trace(go.Bar(
+                x=df_d["Short"], y=df_d["Focus Count"],
+                name=name, marker_color=color,
+                hovertext=df_d["Package"],
+            ))
+        fig.update_layout(
+            title="App Focus Frequency (all displays)",
+            barmode="group", height=400,
+            xaxis={"categoryorder": "total descending"},
+            legend_title="Display",
         )
-        fig.update_layout(height=400)
         figs.append(fig)
 
-    # App usage timeline (Gantt)
-    if durations:
-        timeline_data = []
-        for i in range(len(df_sorted) - 1):
-            pkg = str(df_sorted.iloc[i]["current_pkg"]) if pd.notna(df_sorted.iloc[i]["current_pkg"]) else ""
-            start = df_sorted.iloc[i]["datetime"]
-            end = df_sorted.iloc[i + 1]["datetime"]
-            short = pkg.split(".")[-1] if pkg else "None"
-            timeline_data.append({"App": short, "Start": start, "End": end, "Package": pkg})
-        df_timeline = pd.DataFrame(timeline_data)
-        # Filter to reasonable durations
-        df_timeline["dur_s"] = (df_timeline["End"] - df_timeline["Start"]).dt.total_seconds()
-        df_timeline = df_timeline[df_timeline["dur_s"] < 600]
-        if not df_timeline.empty:
-            fig = px.timeline(
-                df_timeline,
-                x_start="Start",
-                x_end="End",
-                y="App",
-                title="App Usage Timeline",
-                color="App",
+    # --- Time in Package: ONE grouped bar chart, bars colored per screen ---
+    df_sorted = df_physical.sort_values("datetime").reset_index(drop=True)
+    all_time_data = []
+    for did in display_ids:
+        df_disp = df_sorted[df_sorted["display_id"] == did].reset_index(drop=True)
+        if len(df_disp) < 2:
+            continue
+        name = DISPLAY_NAMES.get(did, f"Display {did}")
+        durations = []
+        for i in range(len(df_disp) - 1):
+            pkg = str(df_disp.iloc[i]["current_pkg"])
+            if not pkg or pkg == "nan":
+                continue
+            dur = (df_disp.iloc[i + 1]["timestamp"] - df_disp.iloc[i]["timestamp"]) / 1000
+            if 0 < dur < 3600:
+                durations.append({"package": pkg, "duration_s": dur})
+        if durations:
+            df_dur = pd.DataFrame(durations)
+            app_time = df_dur.groupby("package")["duration_s"].sum().reset_index()
+            app_time["Short"] = app_time["package"].apply(_short_name)
+            app_time["Display"] = name
+            app_time["display_id"] = did
+            # Filter out unknowns
+            app_time = app_time[app_time["Short"] != "unknown"]
+            all_time_data.append(app_time)
+
+    if all_time_data:
+        df_time_all = pd.concat(all_time_data, ignore_index=True)
+        fig = go.Figure()
+        for did in display_ids:
+            name = DISPLAY_NAMES.get(did, f"Display {did}")
+            color = DISPLAY_COLORS.get(did, "#888888")
+            df_d = df_time_all[df_time_all["display_id"] == did]
+            if df_d.empty:
+                continue
+            fig.add_trace(go.Bar(
+                x=df_d["Short"], y=df_d["duration_s"],
+                name=name, marker_color=color,
+                hovertext=df_d["package"],
+                text=df_d["duration_s"].apply(lambda x: f"{x:.0f}s"),
+            ))
+        fig.update_layout(
+            title="Time in Package (all displays)",
+            barmode="group", height=400,
+            xaxis={"categoryorder": "total descending"},
+            yaxis_title="Duration (s)",
+            legend_title="Display",
+        )
+        figs.append(fig)
+
+    # --- Time in Class (more granular) ---
+    for did in display_ids:
+        df_disp = df_sorted[df_sorted["display_id"] == did].reset_index(drop=True)
+        if len(df_disp) < 2:
+            continue
+        name = DISPLAY_NAMES.get(did, f"Display {did}")
+        durations = []
+        for i in range(len(df_disp) - 1):
+            cls = str(df_disp.iloc[i]["current_class"])
+            pkg = str(df_disp.iloc[i]["current_pkg"])
+            dur = (df_disp.iloc[i + 1]["timestamp"] - df_disp.iloc[i]["timestamp"]) / 1000
+            if 0 < dur < 3600:
+                cls_short = cls.split(".")[-1] if cls else "unknown"
+                durations.append({"class": cls_short, "package": _short_name(pkg), "duration_s": dur})
+        if durations:
+            df_dur = pd.DataFrame(durations)
+            class_time = df_dur.groupby(["class", "package"])["duration_s"].sum().reset_index()
+            class_time = class_time.sort_values("duration_s", ascending=False).head(15)
+            fig = px.bar(
+                class_time,
+                x="class",
+                y="duration_s",
+                color="package",
+                title=f"Time in Class — {name} (Top 15)",
+                text=class_time["duration_s"].apply(lambda x: f"{x:.0f}s"),
             )
-            fig.update_layout(height=400, showlegend=False)
+            fig.update_layout(height=400, xaxis={"categoryorder": "total descending"})
             figs.append(fig)
 
-    # Sankey: app transitions
-    transitions = df_physical[["previous_pkg", "current_pkg"]].dropna()
-    transitions = transitions[transitions["previous_pkg"] != ""]
-    if len(transitions) > 0:
+    # --- App Package Transition Flow (Sankey) — one per display ---
+    for did in display_ids:
+        df_disp = df_sorted[df_sorted["display_id"] == did].reset_index(drop=True)
+        if len(df_disp) < 2:
+            continue
+        name = DISPLAY_NAMES.get(did, f"Display {did}")
+        transitions = pd.DataFrame({
+            "previous_pkg": df_disp["current_pkg"].shift(1),
+            "current_pkg": df_disp["current_pkg"],
+        }).dropna()
+        transitions = transitions[transitions["previous_pkg"].str.len() > 0]
+        transitions = transitions[transitions["previous_pkg"] != transitions["current_pkg"]]
+        if len(transitions) == 0:
+            continue
         trans_counts = transitions.groupby(["previous_pkg", "current_pkg"]).size().reset_index(name="count")
         trans_counts = trans_counts.sort_values("count", ascending=False).head(20)
-        all_nodes = list(set(trans_counts["previous_pkg"].tolist() + trans_counts["current_pkg"].tolist()))
-        all_nodes_short = [n.split(".")[-1] for n in all_nodes]
-        node_map = {n: i for i, n in enumerate(all_nodes)}
+        all_pkgs = list(set(trans_counts["previous_pkg"].tolist() + trans_counts["current_pkg"].tolist()))
+        node_labels = [_short_name(p) for p in all_pkgs]
+        node_map = {p: i for i, p in enumerate(all_pkgs)}
         fig = go.Figure(go.Sankey(
-            node=dict(label=all_nodes_short, pad=15, thickness=20),
+            node=dict(label=node_labels, pad=15, thickness=20),
             link=dict(
                 source=[node_map[r["previous_pkg"]] for _, r in trans_counts.iterrows()],
                 target=[node_map[r["current_pkg"]] for _, r in trans_counts.iterrows()],
                 value=trans_counts["count"].tolist(),
             ),
         ))
-        fig.update_layout(title="App Transition Flow (Top 20)", height=500)
+        fig.update_layout(title=f"Package Transition Flow — {name}", height=450)
         figs.append(fig)
+
+    # --- Class Transition Flow (Sankey) — one per display ---
+    for did in display_ids:
+        df_disp = df_sorted[df_sorted["display_id"] == did].reset_index(drop=True)
+        if len(df_disp) < 2:
+            continue
+        name = DISPLAY_NAMES.get(did, f"Display {did}")
+        cls_data = pd.DataFrame({
+            "previous_class": df_disp["current_class"].shift(1),
+            "current_class": df_disp["current_class"],
+        }).dropna()
+        cls_data = cls_data[cls_data["previous_class"].str.len() > 0]
+        cls_data = cls_data[cls_data["previous_class"] != cls_data["current_class"]]
+        if len(cls_data) == 0:
+            continue
+        cls_data["prev_short"] = cls_data["previous_class"].apply(lambda x: x.split(".")[-1])
+        cls_data["curr_short"] = cls_data["current_class"].apply(lambda x: x.split(".")[-1])
+        cls_counts = cls_data.groupby(["prev_short", "curr_short"]).size().reset_index(name="count")
+        cls_counts = cls_counts.sort_values("count", ascending=False).head(20)
+        if len(cls_counts) == 0:
+            continue
+        all_cls = list(set(cls_counts["prev_short"].tolist() + cls_counts["curr_short"].tolist()))
+        cls_map = {c: i for i, c in enumerate(all_cls)}
+        fig = go.Figure(go.Sankey(
+            node=dict(label=all_cls, pad=15, thickness=20),
+            link=dict(
+                source=[cls_map[r["prev_short"]] for _, r in cls_counts.iterrows()],
+                target=[cls_map[r["curr_short"]] for _, r in cls_counts.iterrows()],
+                value=cls_counts["count"].tolist(),
+            ),
+        ))
+        fig.update_layout(title=f"Class Transition Flow — {name}", height=450)
+        figs.append(fig)
+
+    # --- App Usage Timeline (Gantt) ---
+    for did in display_ids[:2]:
+        df_disp = df_sorted[df_sorted["display_id"] == did].reset_index(drop=True)
+        if len(df_disp) < 2:
+            continue
+        name = DISPLAY_NAMES.get(did, f"Display {did}")
+        timeline_data = []
+        for i in range(len(df_disp) - 1):
+            pkg = str(df_disp.iloc[i]["current_pkg"]) if pd.notna(df_disp.iloc[i]["current_pkg"]) else ""
+            start = df_disp.iloc[i]["datetime"]
+            end = df_disp.iloc[i + 1]["datetime"]
+            short = _short_name(pkg)
+            timeline_data.append({"App": short, "Start": start, "End": end})
+        if timeline_data:
+            df_timeline = pd.DataFrame(timeline_data)
+            df_timeline["dur_s"] = (df_timeline["End"] - df_timeline["Start"]).dt.total_seconds()
+            df_timeline = df_timeline[df_timeline["dur_s"] < 600]
+            if not df_timeline.empty:
+                fig = px.timeline(
+                    df_timeline,
+                    x_start="Start",
+                    x_end="End",
+                    y="App",
+                    title=f"App Usage Timeline — {name}",
+                    color="App",
+                )
+                fig.update_layout(height=350, showlegend=False)
+                figs.append(fig)
 
     return _figs_to_html(figs)
 
 
 def build_touch(dfs: dict) -> str:
-    """Section 3: Touch interaction analysis with per-display heatmaps."""
+    """Section 3: Touch interaction — finer heatmaps, include swipes."""
     figs = []
     touch_actions = ["Touch_Down", "Touch_Up", "Touch_Swipe"]
     touch_dfs = [dfs[a] for a in touch_actions if a in dfs and not dfs[a].empty]
@@ -354,52 +538,99 @@ def build_touch(dfs: dict) -> str:
     if not touch_dfs:
         return "<p>No touch data available.</p>"
 
-    df_down = dfs.get("Touch_Down", pd.DataFrame())
+    # Instrument cluster (display 1) is not a touchscreen — exclude it
+    TOUCH_EXCLUDED_DISPLAYS = {1}
 
-    # Per-display heatmaps
-    if not df_down.empty and "displayId" in df_down.columns:
-        display_ids = sorted(df_down["displayId"].dropna().unique())
+    # Combine Down + Swipe for heatmap
+    heatmap_actions = ["Touch_Down", "Touch_Swipe"]
+    heatmap_dfs = [dfs[a] for a in heatmap_actions if a in dfs and not dfs[a].empty]
+    df_heatmap = pd.concat(heatmap_dfs, ignore_index=True) if heatmap_dfs else pd.DataFrame()
+
+    note_html = ""
+    # Per-display heatmaps with fine resolution
+    if not df_heatmap.empty and "displayId" in df_heatmap.columns:
+        display_ids = sorted(d for d in df_heatmap["displayId"].dropna().unique() if int(d) not in TOUCH_EXCLUDED_DISPLAYS)
         for did in display_ids:
             did_int = int(did)
-            df_disp = df_down[df_down["displayId"] == did_int]
+            df_disp = df_heatmap[df_heatmap["displayId"] == did_int]
             if df_disp.empty:
                 continue
             name = DISPLAY_NAMES.get(did_int, f"Display {did_int}")
             res = DISPLAY_RESOLUTIONS.get(did_int, (1920, 720))
-            fig = px.density_heatmap(
-                df_disp,
-                x="x",
-                y="y",
-                title=f"Touch Heatmap — {name} (n={len(df_disp)})",
-                nbinsx=48,
-                nbinsy=int(48 * res[1] / res[0]),
-                color_continuous_scale="Hot",
+            n_points = len(df_disp)
+
+            # Adaptive bin size: fewer points = larger bins for smoother appearance
+            if n_points < 50:
+                bin_size = 80  # large bins for sparse data
+            elif n_points < 200:
+                bin_size = 40
+            else:
+                bin_size = 20  # fine bins for dense data
+
+            nbinsx = max(10, res[0] // bin_size)
+            nbinsy = max(8, res[1] // bin_size)
+
+            # Scale figure to match pixel aspect ratio
+            fig_width = 700
+            fig_height = int(fig_width * res[1] / res[0]) + 80  # +80 for title/margins
+
+            fig = go.Figure()
+            fig.add_trace(go.Histogram2d(
+                x=df_disp["x"].tolist(),
+                y=df_disp["y"].tolist(),
+                nbinsx=nbinsx,
+                nbinsy=nbinsy,
+                colorscale=[[0, "rgba(30,30,50,0)"], [0.15, "#4575b4"],
+                            [0.35, "#91bfdb"], [0.5, "#fee090"],
+                            [0.7, "#fc8d59"], [1.0, "#d73027"]],
+                showscale=True,
+                colorbar=dict(title="Touches"),
+                zsmooth="best",
+            ))
+            # Draw display boundary rectangle
+            fig.add_shape(
+                type="rect", x0=0, y0=0, x1=res[0], y1=res[1],
+                line=dict(color="#555555", width=2),
             )
-            fig.update_xaxes(range=[0, res[0]], title="X")
-            fig.update_yaxes(range=[res[1], 0], title="Y")  # Invert Y (screen coords)
-            fig.update_layout(height=400, width=700)
+            fig.update_layout(
+                title=f"Touch Heatmap — {name} (n={n_points}, taps + swipes)",
+                xaxis=dict(range=[0, res[0]], title="X", showgrid=False, constrain="domain"),
+                yaxis=dict(range=[res[1], 0], title="Y", showgrid=False, scaleanchor="x", constrain="domain"),
+                height=fig_height,
+                width=fig_width,
+                plot_bgcolor="#1e1e32",
+            )
             figs.append(fig)
+
+        # Note about data density
+        total_touches = len(df_heatmap)
+        note_html = (
+            f"<p><em>Note: {total_touches} touch events in this recording. "
+            "Smooth heatmaps (like eye-tracking studies) require 1000+ data points. "
+            "The current data shows individual touch clusters rather than smooth gradients. "
+            "Longer recording sessions with more interaction will produce smoother maps.</em></p>"
+        )
 
     # Touch rate over time
     all_touch = pd.concat(touch_dfs, ignore_index=True) if touch_dfs else pd.DataFrame()
     if not all_touch.empty and "datetime" in all_touch.columns:
         all_touch["time_bin"] = all_touch["datetime"].dt.floor("30s")
         rate = all_touch.groupby("time_bin").size().reset_index(name="touches")
-        rate["touches_per_min"] = rate["touches"] * 2  # 30s bins → per min
+        rate["touches_per_min"] = rate["touches"] * 2
         fig = px.line(
             rate,
             x="time_bin",
             y="touches_per_min",
-            title="Touch Rate Over Time (per minute)",
+            title="Touch Rate Over Time (per minute, all types incl. swipes)",
             markers=True,
         )
         fig.update_layout(height=300)
         figs.append(fig)
 
-    # Touch duration distribution (Down → Up pairing)
+    # Touch duration distribution
+    df_down = dfs.get("Touch_Down", pd.DataFrame())
     df_up = dfs.get("Touch_Up", pd.DataFrame())
     if not df_down.empty and not df_up.empty:
-        # Simple: pair consecutive down/up by timestamp
         downs = df_down["timestamp"].sort_values().values
         ups = df_up["timestamp"].sort_values().values
         durations = []
@@ -409,7 +640,7 @@ def build_touch(dfs: dict) -> str:
                 up_idx += 1
             if up_idx < len(ups):
                 dur = ups[up_idx] - d
-                if 0 < dur < 5000:  # reasonable touch duration < 5s
+                if 0 < dur < 5000:
                     durations.append(dur)
                     up_idx += 1
         if durations:
@@ -422,7 +653,67 @@ def build_touch(dfs: dict) -> str:
             fig.update_layout(height=300)
             figs.append(fig)
 
-    return _figs_to_html(figs)
+    # Touches per App — one grouped bar chart, bars colored per display
+    df_focus = dfs.get("App_FocusChanged", pd.DataFrame())
+    if not all_touch.empty and not df_focus.empty and "displayId" in all_touch.columns:
+        df_focus_sorted = df_focus.sort_values("timestamp").reset_index(drop=True)
+        focus_pkg = df_focus_sorted.apply(
+            lambda r: str(r.get("current.package", "") or ""), axis=1
+        )
+        focus_display = df_focus_sorted.apply(
+            lambda r: int(r.get("current.displayId") or 0) if pd.notna(r.get("current.displayId")) else 0, axis=1
+        )
+        focus_ts = df_focus_sorted["timestamp"].values
+
+        touch_display_ids = sorted(d for d in all_touch["displayId"].dropna().unique() if int(d) not in TOUCH_EXCLUDED_DISPLAYS)
+        fig_touches_app = go.Figure()
+        has_data = False
+        for did in touch_display_ids:
+            did_int = int(did)
+            name = DISPLAY_NAMES.get(did_int, f"Display {did_int}")
+            color = DISPLAY_COLORS.get(did_int, "#888888")
+
+            mask = focus_display == did_int
+            disp_focus_ts = focus_ts[mask]
+            disp_focus_pkg = focus_pkg[mask].values
+
+            if len(disp_focus_ts) == 0:
+                continue
+
+            df_touch_disp = all_touch[all_touch["displayId"] == did_int]
+            if df_touch_disp.empty:
+                continue
+
+            touch_ts_arr = df_touch_disp["timestamp"].values
+            app_for_touch = []
+            for t_ts in touch_ts_arr:
+                idx = disp_focus_ts.searchsorted(t_ts, side="right") - 1
+                if idx >= 0:
+                    app_for_touch.append(_short_name(disp_focus_pkg[idx]))
+                else:
+                    app_for_touch.append("unknown")
+
+            touch_app_counts = pd.Series(app_for_touch).value_counts().reset_index()
+            touch_app_counts.columns = ["App", "Touches"]
+            touch_app_counts = touch_app_counts[touch_app_counts["App"] != "unknown"]
+            if not touch_app_counts.empty:
+                fig_touches_app.add_trace(go.Bar(
+                    x=touch_app_counts["App"], y=touch_app_counts["Touches"],
+                    name=name, marker_color=color,
+                    text=touch_app_counts["Touches"],
+                ))
+                has_data = True
+
+        if has_data:
+            fig_touches_app.update_layout(
+                title="Touches per App (all displays)",
+                barmode="group", height=400,
+                xaxis={"categoryorder": "total descending"},
+                legend_title="Display",
+            )
+            figs.append(fig_touches_app)
+
+    return note_html + _figs_to_html(figs)
 
 
 def build_audio(dfs: dict) -> str:
@@ -432,29 +723,24 @@ def build_audio(dfs: dict) -> str:
     df_snap = dfs.get("Audio_Snapshot", pd.DataFrame())
     df_change = dfs.get("Audio_StateChanged", pd.DataFrame())
 
-    # Parse volume groups from snapshots
     if not df_snap.empty:
         vol_rows = []
         for _, row in df_snap.iterrows():
             dt = row.get("datetime")
-            # Find carVolumeGroups columns
             for col in row.index:
-                if "carVolumeGroups" in col and "." in col:
-                    group_name = col.split(".")[-1] if "." in col else col
+                if "carVolumeGroups" in col and isinstance(row[col], str) and "/" in row[col]:
+                    group_name = col.replace("carVolumeGroups.", "")
                     val = row[col]
-                    if isinstance(val, str) and "/" in val:
-                        num, den = val.split("/")
-                        try:
-                            ratio = int(num) / int(den)
-                            vol_rows.append({
-                                "datetime": dt,
-                                "group": group_name,
-                                "level": int(num),
-                                "max": int(den),
-                                "ratio": ratio,
-                            })
-                        except ValueError:
-                            pass
+                    num, den = val.split("/")
+                    try:
+                        vol_rows.append({
+                            "datetime": dt,
+                            "group": group_name,
+                            "level": int(num),
+                            "max": int(den),
+                        })
+                    except ValueError:
+                        pass
         if vol_rows:
             df_vol = pd.DataFrame(vol_rows)
             fig = px.line(
@@ -469,12 +755,10 @@ def build_audio(dfs: dict) -> str:
             fig.update_layout(height=400)
             figs.append(fig)
 
-    # Volume change frequency from StateChanged
     if not df_change.empty:
         change_rows = []
         for _, row in df_change.iterrows():
             dt = row.get("datetime")
-            # Look for current.carVolumeGroups changes
             for col in row.index:
                 if "current" in col and "carVolumeGroups" in col:
                     group_name = col.replace("current.", "").replace("carVolumeGroups.", "")
@@ -503,23 +787,35 @@ def build_performance(dfs: dict) -> str:
     """Section 5: Memory & Frame Rate."""
     figs = []
 
-    # Memory
+    # Memory — show total and available
     df_mem = dfs.get("Memory_Usage", pd.DataFrame())
+    mem_expanded = pd.DataFrame()
     if not df_mem.empty:
         mem_expanded = expand_samples(df_mem)
         if "availMb" in mem_expanded.columns and "datetime" in mem_expanded.columns:
-            fig = px.line(
-                mem_expanded,
-                x="datetime",
-                y="availMb",
-                title="Available Memory Over Time (MB)",
-                markers=True,
-            )
-            fig.update_layout(height=350)
+            total_mb = None
+            if "totalMem" in df_mem.columns:
+                total_vals = df_mem["totalMem"].dropna()
+                if len(total_vals) > 0:
+                    total_mb = int(total_vals.iloc[0]) / (1024 * 1024)
+
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=mem_expanded["datetime"],
+                y=mem_expanded["availMb"],
+                mode="lines+markers",
+                name="Available (MB)",
+                line=dict(color="#0f9b8e"),
+            ))
+            if total_mb:
+                fig.add_hline(y=total_mb, line_dash="dash", line_color="gray",
+                              annotation_text=f"Total: {total_mb:.0f} MB")
+            fig.update_layout(title="Memory Over Time", height=350, yaxis_title="MB")
             figs.append(fig)
 
     # Frame Rate
     df_fps = dfs.get("Display_FrameRate", pd.DataFrame())
+    fps_expanded = pd.DataFrame()
     if not df_fps.empty:
         fps_expanded = expand_samples(df_fps)
         if "fps" in fps_expanded.columns and "datetime" in fps_expanded.columns:
@@ -534,41 +830,18 @@ def build_performance(dfs: dict) -> str:
             fig.update_layout(height=350)
             figs.append(fig)
 
+        # Dropped frames — line chart
         if "dropped" in fps_expanded.columns:
-            fig = px.bar(
+            fig = px.line(
                 fps_expanded,
                 x="datetime",
                 y="dropped",
                 title="Dropped Frames Over Time",
+                markers=True,
             )
+            fig.update_traces(line=dict(color="red"))
             fig.update_layout(height=300)
             figs.append(fig)
-
-    # Correlation: Memory vs FPS
-    if not df_mem.empty and not df_fps.empty:
-        mem_exp = expand_samples(df_mem)
-        fps_exp = expand_samples(df_fps)
-        if "availMb" in mem_exp.columns and "fps" in fps_exp.columns:
-            # Merge on nearest timestamp
-            mem_exp["ts"] = mem_exp.get("timestampMillis", 0)
-            fps_exp["ts"] = fps_exp.get("timestampMillis", 0)
-            merged = pd.merge_asof(
-                mem_exp.sort_values("ts")[["ts", "availMb", "datetime"]],
-                fps_exp.sort_values("ts")[["ts", "fps"]],
-                on="ts",
-                direction="nearest",
-                tolerance=5000,
-            )
-            merged = merged.dropna()
-            if len(merged) > 2:
-                fig = px.scatter(
-                    merged,
-                    x="availMb",
-                    y="fps",
-                    title="Memory vs FPS Correlation",
-                )
-                fig.update_layout(height=350)
-                figs.append(fig)
 
     if not figs:
         return "<p>No performance data available.</p>"
@@ -576,7 +849,7 @@ def build_performance(dfs: dict) -> str:
 
 
 def build_network(dfs: dict) -> str:
-    """Section 6: Connectivity & Network."""
+    """Section 6: Connectivity & Network — all transports, all apps."""
     figs = []
 
     # Signal strength
@@ -584,69 +857,115 @@ def build_network(dfs: dict) -> str:
     if not df_signal.empty:
         sig_expanded = expand_samples(df_signal)
         if "signalStrengthDbm" in sig_expanded.columns and "datetime" in sig_expanded.columns:
+            transport = "WiFi"
+            if "transport" in df_signal.columns:
+                transports = df_signal["transport"].dropna().unique()
+                transport = ", ".join(str(t) for t in transports)
             fig = px.line(
                 sig_expanded,
                 x="datetime",
                 y="signalStrengthDbm",
-                title="WiFi Signal Strength (dBm)",
+                title=f"Signal Strength ({transport}) (dBm)",
                 markers=True,
             )
             fig.update_layout(height=350)
             figs.append(fig)
 
-    # Total traffic over time
+    # Transport note
+    df_avail = dfs.get("Connectivity_Available", pd.DataFrame())
+    if not df_avail.empty and "transport" in df_avail.columns:
+        transports = df_avail["transport"].unique()
+        note = f"<p><em>Active transports: {', '.join(str(t) for t in transports)}. "
+        note += "Mobile/Bluetooth/Ethernet would appear here if active on the device.</em></p>"
+    else:
+        note = "<p><em>Only WiFi data on emulator. Real device shows mobile, BT, ethernet too.</em></p>"
+
+    # Total traffic
     df_wifi = dfs.get("Network_WifiTotal", pd.DataFrame())
+    df_mobile = dfs.get("Network_MobileTotal", pd.DataFrame())
+    traffic_traces = []
     if not df_wifi.empty and "datetime" in df_wifi.columns:
+        traffic_traces.append(("WiFi RX", df_wifi, "rxBytes", "#0f9b8e"))
+        traffic_traces.append(("WiFi TX", df_wifi, "txBytes", "#5b8def"))
+    if not df_mobile.empty and "datetime" in df_mobile.columns:
+        traffic_traces.append(("Mobile RX", df_mobile, "rxBytes", "#e74c3c"))
+        traffic_traces.append(("Mobile TX", df_mobile, "txBytes", "#f39c12"))
+
+    if traffic_traces:
         fig = go.Figure()
-        if "rxBytes" in df_wifi.columns:
-            fig.add_trace(go.Scatter(
-                x=df_wifi["datetime"],
-                y=df_wifi["rxBytes"] / 1024,
-                mode="lines+markers",
-                name="RX (KB)",
-            ))
-        if "txBytes" in df_wifi.columns:
-            fig.add_trace(go.Scatter(
-                x=df_wifi["datetime"],
-                y=df_wifi["txBytes"] / 1024,
-                mode="lines+markers",
-                name="TX (KB)",
-            ))
-        fig.update_layout(title="WiFi Traffic Over Time", height=350, yaxis_title="KB")
+        for tname, df_t, col, color in traffic_traces:
+            if col in df_t.columns:
+                fig.add_trace(go.Scatter(
+                    x=df_t["datetime"],
+                    y=df_t[col] / (1024 * 1024),
+                    mode="lines+markers",
+                    name=tname,
+                    line=dict(color=color),
+                ))
+        fig.update_layout(title="Network Traffic Over Time", height=350, yaxis_title="MB")
         figs.append(fig)
 
-    # Per-app traffic
+    # Per-app traffic — ALL apps
     df_perapp = dfs.get("Network_PerAppTraffic", pd.DataFrame())
     if not df_perapp.empty and "apps" in df_perapp.columns:
-        # Take the latest snapshot
-        latest = df_perapp.iloc[-1]
-        apps_data = latest.get("apps", [])
-        if apps_data:
-            app_traffic = []
+        app_totals = defaultdict(lambda: {"rx": 0, "tx": 0, "packages": []})
+        for _, row in df_perapp.iterrows():
+            apps_data = row.get("apps", [])
+            if not apps_data:
+                continue
             for app in apps_data:
-                if isinstance(app, dict):
-                    pkgs = app.get("packages", [])
-                    label = pkgs[0] if pkgs else f"uid:{app.get('uid')}"
-                    label = label.split(".")[-1] if "." in label else label
-                    rx = app.get("rxBytes", 0) / 1024
-                    tx = app.get("txBytes", 0) / 1024
-                    if rx + tx > 0:
-                        app_traffic.append({"App": label, "RX (KB)": rx, "TX (KB)": tx})
+                if not isinstance(app, dict):
+                    continue
+                pkgs = app.get("packages", [])
+                uid = app.get("uid", 0)
+                label = pkgs[0] if pkgs else f"uid:{uid}"
+                rx = app.get("rxBytes", 0)
+                tx = app.get("txBytes", 0)
+                app_totals[label]["rx"] = max(app_totals[label]["rx"], rx)
+                app_totals[label]["tx"] = max(app_totals[label]["tx"], tx)
+                app_totals[label]["packages"] = pkgs
+
+        if app_totals:
+            app_traffic = []
+            for label, data in app_totals.items():
+                if label == "root":
+                    display_name = "root (kernel/netd)"
+                elif "location.fused" in label:
+                    display_name = "system (fused=location+car+settings)"
+                else:
+                    display_name = _short_name(label)
+                rx_mb = data["rx"] / (1024 * 1024)
+                tx_mb = data["tx"] / (1024 * 1024)
+                if rx_mb + tx_mb > 0.001:
+                    app_traffic.append({
+                        "App": display_name,
+                        "RX (MB)": rx_mb,
+                        "TX (MB)": tx_mb,
+                        "Total (MB)": rx_mb + tx_mb,
+                        "Full": label,
+                    })
             if app_traffic:
-                df_traffic = pd.DataFrame(app_traffic).sort_values("RX (KB)", ascending=True).tail(10)
+                df_traffic = pd.DataFrame(app_traffic).sort_values("Total (MB)", ascending=True)
                 fig = go.Figure()
-                fig.add_trace(go.Bar(y=df_traffic["App"], x=df_traffic["RX (KB)"], name="RX", orientation="h"))
-                fig.add_trace(go.Bar(y=df_traffic["App"], x=df_traffic["TX (KB)"], name="TX", orientation="h"))
+                fig.add_trace(go.Bar(
+                    y=df_traffic["App"], x=df_traffic["RX (MB)"],
+                    name="RX", orientation="h", marker_color="#0f9b8e",
+                ))
+                fig.add_trace(go.Bar(
+                    y=df_traffic["App"], x=df_traffic["TX (MB)"],
+                    name="TX", orientation="h", marker_color="#5b8def",
+                ))
                 fig.update_layout(
-                    title="Per-App Network Traffic (Top 10, KB)",
+                    title=f"Per-App Network Traffic (All {len(df_traffic)} apps, MB)",
                     barmode="group",
-                    height=400,
+                    height=max(300, len(df_traffic) * 50),
+                    xaxis_title="MB",
                 )
                 figs.append(fig)
 
     if not figs:
-        return "<p>No network data available.</p>"
-    return _figs_to_html(figs)
+        return note + "<p>No network data available.</p>"
+    return note + _figs_to_html(figs)
 
 
 def build_vehicle(dfs: dict) -> str:
@@ -655,7 +974,6 @@ def build_vehicle(dfs: dict) -> str:
 
     df_vhal = dfs.get("VHAL_ValuesChanged", pd.DataFrame())
     if not df_vhal.empty and "changes" in df_vhal.columns:
-        # Expand changes into rows
         vhal_rows = []
         for _, row in df_vhal.iterrows():
             changes = row.get("changes", [])
@@ -669,136 +987,72 @@ def build_vehicle(dfs: dict) -> str:
             if "timestampMillis" in df_props.columns:
                 df_props["datetime"] = pd.to_datetime(df_props["timestampMillis"], unit="ms")
 
-            # Speed profile
+            # Speed
             df_speed = df_props[df_props["property"] == "PERF_VEHICLE_SPEED"].copy()
             if not df_speed.empty:
                 df_speed["current"] = pd.to_numeric(df_speed["current"], errors="coerce")
-                fig = px.line(
-                    df_speed,
-                    x="datetime",
-                    y="current",
-                    title="Vehicle Speed (PERF_VEHICLE_SPEED)",
-                    markers=True,
-                )
-                fig.update_layout(height=350, yaxis_title="Value")
+                fig = px.line(df_speed, x="datetime", y="current", title="Vehicle Speed", markers=True)
+                fig.update_layout(height=300, yaxis_title="km/h")
                 figs.append(fig)
 
-            # Gear selection
+            # Gear
             df_gear = df_props[df_props["property"] == "GEAR_SELECTION"].copy()
             if not df_gear.empty:
                 gear_map = {1: "P", 2: "R", 4: "N", 8: "D"}
                 df_gear["gear_label"] = df_gear["current"].apply(
                     lambda x: gear_map.get(x, str(x)) if x is not None else "?"
                 )
-                fig = px.scatter(
-                    df_gear,
-                    x="datetime",
-                    y="gear_label",
-                    title="Gear Selection",
-                    text="gear_label",
-                )
+                fig = px.scatter(df_gear, x="datetime", y="gear_label", title="Gear Selection", text="gear_label")
                 fig.update_traces(marker=dict(size=12))
-                fig.update_layout(height=250)
+                fig.update_layout(height=200)
                 figs.append(fig)
 
-            # Property value summary table
-            latest_vals = {}
-            for _, r in df_props.iterrows():
-                prop = r.get("property", "")
-                latest_vals[prop] = r.get("current")
-            summary_rows = [{"Property": k, "Value": v} for k, v in sorted(latest_vals.items())]
-            if summary_rows:
-                df_summary = pd.DataFrame(summary_rows)
-                fig = go.Figure(go.Table(
-                    header=dict(values=["Property", "Value"]),
-                    cells=dict(values=[df_summary["Property"], df_summary["Value"]]),
-                ))
-                fig.update_layout(title="VHAL Property Summary (Latest Values)", height=600)
-                figs.append(fig)
-
-    # Power state
+    # Power
     df_power = dfs.get("Power_Boot", pd.DataFrame())
+    power_html = ""
     if not df_power.empty:
-        power_info = "<h4>Power Events</h4><ul>"
+        power_html = "<h4>Power Events</h4><ul>"
         for _, row in df_power.iterrows():
             dt = row.get("datetime", "")
             reason = row.get("bootupReason", "unknown")
-            power_info += f"<li>{dt}: Boot — {reason}</li>"
-        power_info += "</ul>"
-        return power_info + _figs_to_html(figs)
-
-    # Drive state
-    df_speed_change = dfs.get("Vehicle_SpeedChanged", pd.DataFrame())
-    df_parking = dfs.get("Vehicle_ParkingBrakeChanged", pd.DataFrame())
-
-    if not df_speed_change.empty and "current.speedKmh" in df_speed_change.columns:
-        fig = px.line(
-            df_speed_change,
-            x="datetime",
-            y="current.speedKmh",
-            title="Speed (from DriveStateCollector)",
-            markers=True,
-        )
-        fig.update_layout(height=300)
-        figs.append(fig)
+            power_html += f"<li>{dt}: Boot — {reason}</li>"
+        power_html += "</ul>"
 
     if not figs:
-        return "<p>No vehicle data available.</p>"
-    return _figs_to_html(figs)
+        return power_html + "<p>No vehicle data available.</p>"
+    return power_html + _figs_to_html(figs)
 
 
 def build_storage_battery(dfs: dict) -> str:
     """Section 8: Storage & Battery."""
     figs = []
 
-    # Battery
     df_bat = dfs.get("Battery_Level", pd.DataFrame())
     if not df_bat.empty:
         bat_expanded = expand_samples(df_bat)
         if "level" in bat_expanded.columns and "datetime" in bat_expanded.columns:
-            fig = px.line(
-                bat_expanded,
-                x="datetime",
-                y="level",
-                title="Battery Level Over Time (%)",
-                markers=True,
-            )
-            fig.update_layout(height=350)
+            fig = px.line(bat_expanded, x="datetime", y="level", title="Battery Level (%)", markers=True)
+            fig.update_layout(height=300)
             figs.append(fig)
-
         if "temperatureTenthsC" in bat_expanded.columns:
             bat_expanded["tempC"] = bat_expanded["temperatureTenthsC"] / 10
-            fig = px.line(
-                bat_expanded,
-                x="datetime",
-                y="tempC",
-                title="Battery Temperature (°C)",
-                markers=True,
-            )
+            fig = px.line(bat_expanded, x="datetime", y="tempC", title="Battery Temperature (°C)", markers=True)
             fig.update_layout(height=300)
             figs.append(fig)
 
-    # Storage
     df_storage = dfs.get("Storage_Usage", pd.DataFrame())
     if not df_storage.empty and "usagePercent" in df_storage.columns:
         if len(df_storage) > 1:
-            fig = px.line(
-                df_storage,
-                x="datetime",
-                y="usagePercent",
-                title="Storage Usage (%)",
-                markers=True,
-            )
+            fig = px.line(df_storage, x="datetime", y="usagePercent", title="Storage Usage (%)", markers=True)
         else:
-            fig = px.bar(
-                df_storage,
-                x=["Used", "Available"],
-                y=[df_storage.iloc[0].get("usedBytes", 0) / 1e9,
-                   df_storage.iloc[0].get("availableBytes", 0) / 1e9],
-                title=f"Storage ({df_storage.iloc[0].get('usagePercent', 0):.1f}% used)",
-                labels={"x": "", "y": "GB"},
-            )
-        fig.update_layout(height=300)
+            used_gb = df_storage.iloc[0].get("usedBytes", 0) / 1e9
+            avail_gb = df_storage.iloc[0].get("availableBytes", 0) / 1e9
+            pct = df_storage.iloc[0].get("usagePercent", 0)
+            fig = go.Figure(go.Bar(
+                x=["Used", "Available"], y=[used_gb, avail_gb],
+                marker_color=["#e74c3c", "#0f9b8e"],
+            ))
+            fig.update_layout(title=f"Storage ({pct:.1f}% used)", height=300, yaxis_title="GB")
         figs.append(fig)
 
     if not figs:
@@ -814,54 +1068,37 @@ def build_media(dfs: dict) -> str:
     df_track = dfs.get("Media_TrackChanged", pd.DataFrame())
 
     if not df_playback.empty:
-        # Playback state timeline
-        state_map = {0: "NONE", 1: "STOPPED", 2: "PAUSED", 3: "PLAYING",
-                     6: "BUFFERING", 7: "ERROR"}
         if "current.stateLabel" in df_playback.columns:
             df_playback["state"] = df_playback["current.stateLabel"]
         elif "current.state" in df_playback.columns:
+            state_map = {0: "NONE", 1: "STOPPED", 2: "PAUSED", 3: "PLAYING", 6: "BUFFERING", 7: "ERROR"}
             df_playback["state"] = df_playback["current.state"].map(state_map).fillna("UNKNOWN")
 
         if "current.package" in df_playback.columns:
             df_playback["source"] = df_playback["current.package"].apply(
-                lambda x: x.split(".")[-1] if isinstance(x, str) else "unknown"
+                lambda x: _short_name(str(x)) if pd.notna(x) else "unknown"
             )
-            # Source distribution
             src_counts = df_playback["source"].value_counts().reset_index()
             src_counts.columns = ["Source", "Events"]
-            fig = px.pie(
-                src_counts,
-                values="Events",
-                names="Source",
-                title="Media Source Distribution",
-            )
+            fig = px.pie(src_counts, values="Events", names="Source", title="Media Source Distribution")
             fig.update_layout(height=350)
             figs.append(fig)
 
         if "state" in df_playback.columns:
             fig = px.scatter(
-                df_playback,
-                x="datetime",
-                y="state",
+                df_playback, x="datetime", y="state",
                 color="source" if "source" in df_playback.columns else None,
                 title="Media Playback State Over Time",
-                size_max=12,
             )
             fig.update_traces(marker=dict(size=10))
             fig.update_layout(height=300)
             figs.append(fig)
 
     if not df_track.empty:
-        # Track change frequency
         df_track["time_bin"] = df_track["datetime"].dt.floor("1min")
         track_rate = df_track.groupby("time_bin").size().reset_index(name="skips")
         if len(track_rate) > 1:
-            fig = px.bar(
-                track_rate,
-                x="time_bin",
-                y="skips",
-                title="Track Changes Per Minute",
-            )
+            fig = px.bar(track_rate, x="time_bin", y="skips", title="Track Changes Per Minute")
             fig.update_layout(height=300)
             figs.append(fig)
 
@@ -874,71 +1111,128 @@ def build_correlations(dfs: dict) -> str:
     """Section 10: Cross-collector correlations."""
     figs = []
 
-    # Touch rate vs Frame drops
-    touch_dfs = [dfs.get(a, pd.DataFrame()) for a in ("Touch_Down", "Touch_Up", "Touch_Swipe")]
-    all_touch = pd.concat([d for d in touch_dfs if not d.empty], ignore_index=True)
+    # Touch rate per display vs Dropped Frames
+    touch_actions = ["Touch_Down", "Touch_Up", "Touch_Swipe"]
+    touch_dfs_list = [dfs.get(a, pd.DataFrame()) for a in touch_actions]
+    all_touch = pd.concat([d for d in touch_dfs_list if not d.empty], ignore_index=True)
     df_fps = dfs.get("Display_FrameRate", pd.DataFrame())
 
     if not all_touch.empty and not df_fps.empty:
         fps_exp = expand_samples(df_fps)
         if "dropped" in fps_exp.columns and "datetime" in fps_exp.columns:
-            # Bin touches per 30s
-            all_touch["time_bin"] = all_touch["datetime"].dt.floor("30s")
-            touch_rate = all_touch.groupby("time_bin").size().reset_index(name="touches")
+            min_time = min(all_touch["datetime"].min(), fps_exp["datetime"].min())
+            max_time = max(all_touch["datetime"].max(), fps_exp["datetime"].max())
+            time_bins = pd.date_range(min_time.floor("30s"), max_time.ceil("30s"), freq="30s")
 
-            fps_exp["time_bin"] = fps_exp["datetime"].dt.floor("30s")
-            drops = fps_exp.groupby("time_bin")["dropped"].sum().reset_index()
+            fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-            merged = pd.merge(touch_rate, drops, on="time_bin", how="outer").fillna(0)
-            if len(merged) > 2:
-                fig = make_subplots(specs=[[{"secondary_y": True}]])
+            # Touch rate per display as lines
+            if "displayId" in all_touch.columns:
+                display_ids = sorted(all_touch["displayId"].dropna().unique())
+            else:
+                display_ids = [0]
+
+            for idx, did in enumerate(display_ids):
+                did_int = int(did)
+                if "displayId" in all_touch.columns:
+                    df_disp = all_touch[all_touch["displayId"] == did_int]
+                else:
+                    df_disp = all_touch
+                name = DISPLAY_NAMES.get(did_int, f"Display {did_int}")
+                color = DISPLAY_COLORS.get(did_int, "#888888")
+                df_disp_binned = df_disp.copy()
+                df_disp_binned["time_bin"] = df_disp_binned["datetime"].dt.floor("30s")
+                rate = df_disp_binned.groupby("time_bin").size().reset_index(name="touches")
+                rate = rate.set_index("time_bin").reindex(time_bins, fill_value=0).reset_index()
+                rate.columns = ["time_bin", "touches"]
+                rate["touches_per_min"] = rate["touches"] * 2
                 fig.add_trace(
-                    go.Bar(x=merged["time_bin"], y=merged["touches"], name="Touches", opacity=0.6),
+                    go.Scatter(
+                        x=rate["time_bin"], y=rate["touches_per_min"],
+                        mode="lines", name=f"Touches — {name}",
+                        line=dict(color=color),
+                    ),
                     secondary_y=False,
                 )
+
+            # Dropped frames as bars
+            fps_exp_binned = fps_exp.copy()
+            fps_exp_binned["time_bin"] = fps_exp_binned["datetime"].dt.floor("30s")
+            drops = fps_exp_binned.groupby("time_bin")["dropped"].sum().reset_index()
+            fig.add_trace(
+                go.Bar(
+                    x=drops["time_bin"], y=drops["dropped"],
+                    name="Dropped Frames", opacity=0.4, marker_color="red",
+                ),
+                secondary_y=True,
+            )
+
+            # FPS average as line on secondary axis
+            if "fps" in fps_exp.columns:
+                fps_binned = fps_exp_binned.groupby("time_bin")["fps"].mean().reset_index()
                 fig.add_trace(
-                    go.Scatter(x=merged["time_bin"], y=merged["dropped"], name="Dropped Frames",
-                               mode="lines+markers", line=dict(color="red")),
+                    go.Scatter(
+                        x=fps_binned["time_bin"], y=fps_binned["fps"],
+                        mode="lines+markers", name="FPS (avg)",
+                        line=dict(color="#2ecc71", width=2, dash="dot"),
+                    ),
                     secondary_y=True,
                 )
-                fig.update_layout(title="Touch Rate vs Dropped Frames", height=400)
-                fig.update_yaxes(title_text="Touches", secondary_y=False)
-                fig.update_yaxes(title_text="Dropped Frames", secondary_y=True)
-                figs.append(fig)
 
-    # App switch → Memory delta
+            fig.update_layout(title="Touch Rate vs Dropped Frames & FPS", height=450)
+            fig.update_yaxes(title_text="Touches/min", secondary_y=False)
+            fig.update_yaxes(title_text="Dropped / FPS", secondary_y=True)
+            figs.append(fig)
+
+    # Memory vs App Switches (per display)
     df_focus = dfs.get("App_FocusChanged", pd.DataFrame())
     df_mem = dfs.get("Memory_Usage", pd.DataFrame())
     if not df_focus.empty and not df_mem.empty:
         mem_exp = expand_samples(df_mem)
-        if "availMb" in mem_exp.columns and "datetime" in mem_exp.columns and not df_focus.empty:
-            fig = make_subplots(specs=[[{"secondary_y": True}]])
-            fig.add_trace(
-                go.Scatter(x=mem_exp["datetime"], y=mem_exp["availMb"],
-                           name="Available Memory (MB)", mode="lines"),
-                secondary_y=False,
+        if "availMb" in mem_exp.columns and "datetime" in mem_exp.columns:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=mem_exp["datetime"], y=mem_exp["availMb"],
+                mode="lines", name="Available Memory (MB)",
+                line=dict(color="#0f9b8e", width=2),
+            ))
+
+            df_focus_copy = df_focus.copy()
+            df_focus_copy["display_id"] = df_focus_copy.apply(
+                lambda r: int(r.get("current.displayId") or 0) if pd.notna(r.get("current.displayId")) else 0, axis=1
             )
-            # Add app switch markers
-            for _, row in df_focus.iterrows():
-                fig.add_vline(x=row["datetime"], line_dash="dot", line_color="rgba(255,0,0,0.3)")
-            fig.update_layout(
-                title="Memory vs App Switches (red lines = focus change)",
-                height=400,
-            )
+            display_ids = sorted(df_focus_copy["display_id"].unique())
+
+            for did in display_ids:
+                if did >= 10:
+                    continue
+                name = DISPLAY_NAMES.get(did, f"Display {did}")
+                df_d = df_focus_copy[df_focus_copy["display_id"] == did]
+                color = DISPLAY_COLORS.get(did, "#888888")
+                for _, row in df_d.iterrows():
+                    fig.add_vline(x=row["datetime"], line_dash="dot", line_color=color, opacity=0.5)
+                # Legend entry
+                fig.add_trace(go.Scatter(
+                    x=[df_d.iloc[0]["datetime"]], y=[mem_exp["availMb"].mean()],
+                    mode="markers", name=f"Switch — {name}",
+                    marker=dict(color=color, size=8), showlegend=True,
+                ))
+
+            fig.update_layout(title="Memory vs App Switches (colored by display)", height=400, yaxis_title="MB")
             figs.append(fig)
 
-    # Boot → First interaction latency
+    # Boot → First interaction
     df_power = dfs.get("Power_Boot", pd.DataFrame())
+    latency_html = ""
     if not df_power.empty and not all_touch.empty:
         boot_ts = df_power["timestamp"].min()
         first_touch_ts = all_touch["timestamp"].min()
         latency_s = (first_touch_ts - boot_ts) / 1000
-        figs_html = f"<p><strong>Boot → First Touch Latency:</strong> {latency_s:.1f}s</p>"
-        return figs_html + _figs_to_html(figs)
+        latency_html = f"<p><strong>Boot → First Touch Latency:</strong> {latency_s:.1f}s</p>"
 
     if not figs:
-        return "<p>Insufficient cross-collector data for correlations.</p>"
-    return _figs_to_html(figs)
+        return latency_html + "<p>Insufficient cross-collector data for correlations.</p>"
+    return latency_html + _figs_to_html(figs)
 
 
 # ---------------------------------------------------------------------------
@@ -966,6 +1260,9 @@ main {{ margin-left: 220px; padding: 30px; width: calc(100% - 220px); }}
 section {{ margin-bottom: 60px; }}
 h2 {{ color: #0f9b8e; border-bottom: 1px solid #2a2a4e; padding-bottom: 10px; margin-bottom: 20px; }}
 h3 {{ color: #7878a8; margin: 20px 0 10px; }}
+h4 {{ color: #a0a0c0; margin: 15px 0 8px; }}
+p {{ margin: 10px 0; line-height: 1.5; }}
+em {{ color: #8888a8; }}
 .stats-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
                gap: 16px; margin-bottom: 30px; }}
 .stat-card {{ background: #16213e; border-radius: 12px; padding: 20px; text-align: center; }}
@@ -973,6 +1270,8 @@ h3 {{ color: #7878a8; margin: 20px 0 10px; }}
 .stat-card p {{ color: #8888a8; font-size: 13px; }}
 .js-plotly-plot {{ margin-bottom: 20px; }}
 .generated {{ text-align: center; color: #555; font-size: 12px; margin-top: 40px; }}
+ul {{ margin: 10px 0 10px 20px; }}
+li {{ margin: 4px 0; }}
 </style>
 </head>
 <body>
@@ -1044,13 +1343,13 @@ h3 {{ color: #7878a8; margin: 20px 0 10px; }}
 def main():
     if len(sys.argv) < 2:
         print("Usage: python3 generate_report.py <path_to_jsonl_dir_or_files...>")
-        print("Example: python3 generate_report.py telemetry-logs/")
+        print("Example: python3 generate_report.py telemetry_analysis/telemetry-logs/")
         sys.exit(1)
 
     paths = sys.argv[1:]
     print(f"[1/5] Ingesting from: {paths}")
     events = ingest(paths)
-    print(f"       → {len(events)} events loaded")
+    print(f"       -> {len(events)} events loaded")
 
     if not events:
         print("ERROR: No events found. Check the input path.")
@@ -1058,7 +1357,7 @@ def main():
 
     print("[2/5] Normalizing data...")
     dfs = normalize(events)
-    print(f"       → {len(dfs)} action types")
+    print(f"       -> {len(dfs)} action types")
 
     print("[3/5] Building report sections...")
     sections = {
@@ -1088,8 +1387,8 @@ def main():
         f.write(html)
 
     size_mb = os.path.getsize(output_path) / (1024 * 1024)
-    print(f"\n✓ Report generated: {output_path} ({size_mb:.1f} MB)")
-    print(f"  Open in browser: file://{output_path.resolve()}")
+    print(f"\n Done! Report: {output_path} ({size_mb:.1f} MB)")
+    print(f"  Open: file://{output_path.resolve()}")
 
 
 if __name__ == "__main__":
