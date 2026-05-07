@@ -71,12 +71,8 @@ class DataCollectorService : Service() {
      *
      * ── General TODOs (ordered by dependency — do top-first) ───────────────────
      *
-     * TODO G1: Homogeneous payload structure — define a consistent schema for all collectors:
-     *          ensure every event has `previous` + `current` values, same key naming, same nesting.
-     *          (All per-collector fixes below depend on this being settled first.)
-     *
-     * TODO G2: Consistent timestamps — all timestamps in metadata must use epochSec (Long).
-     *          Audit every collector's metadata map for mixed formats.
+     * DONE G1: Homogeneous payload structure — see docs/guides/signal-structure-guidelines.md
+     * DONE G2: Consistent timestamps — all use epochMillis (Long). Removed epochSec, iso8601.
      *
      * TODO G3: Event correlation — add a shared session/correlation ID so events from the
      *          same drive session or time window can be linked across collectors.
@@ -112,6 +108,8 @@ class DataCollectorService : Service() {
      *
      * TODO G14: FrameRate schema — use an efficient schema (deltas/run-length) if frame rate
      *           data volume becomes a concern.
+     * 
+     * TODO G15: Add unit and system and maybe e2etests
      *
      * ── Per-Collector TODOs (ordered: broken > wrong data > needs tuning > verify only) ──
      *

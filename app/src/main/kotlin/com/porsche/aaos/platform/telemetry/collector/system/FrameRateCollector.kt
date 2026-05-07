@@ -17,7 +17,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.time.Instant
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
@@ -35,12 +34,12 @@ import javax.inject.Inject
  * works universally and is sufficient for detecting smoothness drops.
  *
  * Payload (FrameRate_Current): emitted every 60s with 12 samples (5s each).
- *   sampleSchema: [epochSec, frames, dropped, fps]
- *   - epochSec: Unix timestamp (seconds since 1970-01-01)
+ *   sampleSchema: [timestampMillis, frames, dropped, fps]
+ *   - timestampMillis: Unix timestamp (milliseconds since 1970-01-01)
  *   - frames: vsync callbacks fired in the 5s window (target: 300 at 60Hz)
  *   - dropped: frames that took >1.5x expected period (jank indicator)
  *   - fps: frames / 5.0 — effective frame rate
- *   Example: [1778082427, 300, 0, 60.0] = "at that moment, 300 frames in 5s, 0 dropped, 60fps smooth"
+ *   Example: [1778082427000, 300, 0, 60.0] = "at that moment, 300 frames in 5s, 0 dropped, 60fps smooth"
  *
  * Event (Display_StateChanged): emitted instantly when any display turns ON or OFF.
  */
@@ -136,8 +135,8 @@ class FrameRateCollector @Inject constructor(
                 val dropped = droppedFrames.getAndSet(0)
                 val fps = String.format("%.1f", frames / (SAMPLE_INTERVAL_MS / 1000.0)).toDouble()
 
-                // Compact: [timestamp, frameCount, droppedFrames, measuredFps]
-                samples.add(listOf(Instant.now().epochSecond, frames, dropped, fps))
+                // Compact: [timestampMillis, frameCount, droppedFrames, measuredFps]
+                samples.add(listOf(System.currentTimeMillis(), frames, dropped, fps))
 
                 if (samples.size >= SAMPLES_PER_BATCH) {
                     telemetry.send(
@@ -145,9 +144,9 @@ class FrameRateCollector @Inject constructor(
                             signalId = signalId,
                             payload = mapOf(
                                 "actionName" to "FrameRate_Current",
-                                "trigger" to "system",
+                                "trigger" to "heartbeat",
                                 "metadata" to mapOf(
-                                    "sampleSchema" to listOf("epochSec", "frames", "dropped", "fps"),
+                                    "sampleSchema" to listOf("timestampMillis", "frames", "dropped", "fps"),
                                     "samples" to samples.toList(),
                                 ),
                             ),

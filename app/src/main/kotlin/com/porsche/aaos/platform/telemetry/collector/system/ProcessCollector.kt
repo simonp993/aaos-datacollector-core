@@ -53,7 +53,7 @@ class ProcessCollector @Inject constructor(
                         signalId = signalId,
                         payload = mapOf(
                             "actionName" to "Process_ListChanged",
-                            "trigger" to "system",
+                            "trigger" to "heartbeat",
                             "metadata" to mapOf(
                                 "count" to processes.size,
                                 "addedPids" to added.toList(),

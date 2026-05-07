@@ -9,9 +9,7 @@ import com.porsche.aaos.platform.telemetry.core.logging.Logger
 import com.porsche.aaos.platform.telemetry.telemetry.Telemetry
 import com.porsche.aaos.platform.telemetry.telemetry.TelemetryEvent
 import dagger.hilt.android.qualifiers.ApplicationContext
-import java.time.Instant
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import javax.inject.Inject
 
 class TimeChangeCollector @Inject constructor(
@@ -42,7 +40,6 @@ class TimeChangeCollector @Inject constructor(
                     else -> "system"
                 }
 
-                val now = Instant.now()
                 val zone = ZoneId.systemDefault()
 
                 telemetry.send(
@@ -52,15 +49,12 @@ class TimeChangeCollector @Inject constructor(
                             "actionName" to actionName,
                             "trigger" to trigger,
                             "metadata" to mapOf(
-                                "epochMillis" to now.toEpochMilli(),
-                                "iso8601" to DateTimeFormatter.ISO_OFFSET_DATE_TIME
-                                    .format(now.atZone(zone)),
                                 "timezone" to zone.id,
                             ),
                         ),
                     ),
                 )
-                logger.d(TAG, "$actionName at ${now.atZone(zone)}")
+                logger.d(TAG, "$actionName — timezone=${zone.id}")
             }
         }
         receiver = broadcastReceiver

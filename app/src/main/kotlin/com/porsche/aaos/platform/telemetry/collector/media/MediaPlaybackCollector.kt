@@ -26,6 +26,10 @@ class MediaPlaybackCollector @Inject constructor(
     private var sessionManager: MediaSessionManager? = null
     private val activeCallbacks = mutableMapOf<MediaController, MediaController.Callback>()
 
+    // Previous state per controller package for prev/current payloads
+    private val previousPlaybackState = mutableMapOf<String, Map<String, Any?>>()
+    private val previousMetadata = mutableMapOf<String, Map<String, Any?>>()
+
     private val sessionListener =
         MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
             logger.d(TAG, "Active sessions changed: ${controllers?.size ?: 0}")
@@ -138,6 +142,15 @@ class MediaPlaybackCollector @Inject constructor(
     }
 
     private fun sendPlaybackEvent(controller: MediaController, state: PlaybackState?) {
+        val current = mapOf(
+            "package" to controller.packageName,
+            "state" to (state?.state ?: PlaybackState.STATE_NONE),
+            "stateLabel" to playbackStateLabel(state?.state),
+            "position" to (state?.position ?: 0L),
+        )
+        val pkg = controller.packageName ?: "unknown"
+        val previous = previousPlaybackState[pkg]
+        if (current == previous) return
         telemetry.send(
             TelemetryEvent(
                 signalId = signalId,
@@ -145,18 +158,26 @@ class MediaPlaybackCollector @Inject constructor(
                     "actionName" to "Media_PlaybackStateChanged",
                     "trigger" to "user",
                     "metadata" to mapOf(
-                        "package" to controller.packageName,
-                        "state" to (state?.state ?: PlaybackState.STATE_NONE),
-                        "stateLabel" to playbackStateLabel(state?.state),
-                        "position" to (state?.position ?: 0L),
+                        "previous" to previous,
+                        "current" to current,
                     ),
                 ),
             ),
         )
+        previousPlaybackState[pkg] = current
     }
 
     private fun sendMetadataEvent(controller: MediaController, metadata: android.media.MediaMetadata?) {
         if (metadata == null) return
+        val current = mapOf(
+            "package" to controller.packageName,
+            "title" to metadata.getString(android.media.MediaMetadata.METADATA_KEY_TITLE),
+            "artist" to metadata.getString(android.media.MediaMetadata.METADATA_KEY_ARTIST),
+            "duration" to metadata.getLong(android.media.MediaMetadata.METADATA_KEY_DURATION),
+        )
+        val pkg = controller.packageName ?: "unknown"
+        val previous = previousMetadata[pkg]
+        if (current == previous) return
         telemetry.send(
             TelemetryEvent(
                 signalId = signalId,
@@ -164,14 +185,13 @@ class MediaPlaybackCollector @Inject constructor(
                     "actionName" to "Media_MetadataChanged",
                     "trigger" to "user",
                     "metadata" to mapOf(
-                        "package" to controller.packageName,
-                        "title" to metadata.getString(android.media.MediaMetadata.METADATA_KEY_TITLE),
-                        "artist" to metadata.getString(android.media.MediaMetadata.METADATA_KEY_ARTIST),
-                        "duration" to metadata.getLong(android.media.MediaMetadata.METADATA_KEY_DURATION),
+                        "previous" to previous,
+                        "current" to current,
                     ),
                 ),
             ),
         )
+        previousMetadata[pkg] = current
     }
 
     private fun playbackStateLabel(state: Int?): String = when (state) {

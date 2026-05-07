@@ -171,20 +171,16 @@ class AudioCollector @Inject constructor(
         debounceRunnable = null
         lastEmittedState = currentState
 
-        val metadata = currentState.toMutableMap()
-        if (previous != null) {
-            val diff = deepDiff(previous, currentState)
-            if (diff.isNotEmpty()) {
-                metadata["previousState"] = diff
-            }
-        }
         telemetry.send(
             TelemetryEvent(
                 signalId = signalId,
                 payload = mapOf(
                     "actionName" to "Audio_VolumeStateChanged",
                     "trigger" to "user",
-                    "metadata" to metadata,
+                    "metadata" to mapOf(
+                        "previous" to previous,
+                        "current" to currentState,
+                    ),
                 ),
             ),
         )
@@ -199,33 +195,13 @@ class AudioCollector @Inject constructor(
                 payload = mapOf(
                     "actionName" to "Audio_VolumeStateChanged",
                     "trigger" to "heartbeat",
-                    "metadata" to currentState,
+                    "metadata" to mapOf(
+                        "previous" to null,
+                        "current" to currentState,
+                    ),
                 ),
             ),
         )
-    }
-
-    /**
-     * Deep diff: returns only the entries from [old] that differ from [current].
-     * For nested Maps, recurses to return only changed sub-keys.
-     */
-    @Suppress("UNCHECKED_CAST")
-    private fun deepDiff(old: Map<String, Any>, current: Map<String, Any>): Map<String, Any> {
-        val diff = mutableMapOf<String, Any>()
-        for ((key, oldValue) in old) {
-            val newValue = current[key]
-            if (oldValue == newValue) continue
-            if (oldValue is Map<*, *> && newValue is Map<*, *>) {
-                val subDiff = deepDiff(
-                    oldValue as Map<String, Any>,
-                    newValue as Map<String, Any>,
-                )
-                if (subDiff.isNotEmpty()) diff[key] = subDiff
-            } else {
-                diff[key] = oldValue
-            }
-        }
-        return diff
     }
 
     private fun buildAudioState(

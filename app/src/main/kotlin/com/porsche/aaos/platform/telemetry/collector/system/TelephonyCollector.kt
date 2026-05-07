@@ -26,6 +26,10 @@ class TelephonyCollector @Inject constructor(
     private var telephonyManager: TelephonyManager? = null
     private var phoneStateListener: PhoneStateListener? = null
 
+    // Previous state tracking for prev/current payloads
+    private var previousCallState: Map<String, Any>? = null
+    private var previousSignalLevel: Map<String, Any>? = null
+
     override suspend fun start() {
         logger.i(TAG, "Starting telephony monitoring")
         val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
@@ -38,6 +42,11 @@ class TelephonyCollector @Inject constructor(
         withContext(Dispatchers.Main) {
             val listener = object : PhoneStateListener() {
                 override fun onCallStateChanged(state: Int, phoneNumber: String?) {
+                    val current = mapOf(
+                        "state" to state,
+                        "label" to callStateLabel(state),
+                    )
+                    if (current == previousCallState) return
                     telemetry.send(
                         TelemetryEvent(
                             signalId = signalId,
@@ -45,15 +54,20 @@ class TelephonyCollector @Inject constructor(
                                 "actionName" to "Telephony_CallStateChanged",
                                 "trigger" to "system",
                                 "metadata" to mapOf(
-                                    "state" to state,
-                                    "label" to callStateLabel(state),
+                                    "previous" to previousCallState,
+                                    "current" to current,
                                 ),
                             ),
                         ),
                     )
+                    previousCallState = current
                 }
 
                 override fun onSignalStrengthsChanged(signalStrength: SignalStrength?) {
+                    val current = mapOf(
+                        "level" to (signalStrength?.level ?: -1),
+                    )
+                    if (current == previousSignalLevel) return
                     telemetry.send(
                         TelemetryEvent(
                             signalId = signalId,
@@ -61,11 +75,13 @@ class TelephonyCollector @Inject constructor(
                                 "actionName" to "Telephony_SignalChanged",
                                 "trigger" to "system",
                                 "metadata" to mapOf(
-                                    "level" to (signalStrength?.level ?: -1),
+                                    "previous" to previousSignalLevel,
+                                    "current" to current,
                                 ),
                             ),
                         ),
                     )
+                    previousSignalLevel = current
                 }
             }
             phoneStateListener = listener

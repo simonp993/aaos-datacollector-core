@@ -76,7 +76,7 @@ class AppLifecycleCollector @Inject constructor(
                     initialPollDone = true
                 }
 
-                // Detect changes: emit Paused for old, Resumed for new.
+                // Detect changes: emit single FocusChanged event with previous/current.
                 // Physical displays (0-3) are user-facing screens.
                 // Virtual displays (10, 24, etc.) are off-screen render targets
                 // (e.g. navigation map → IC compositor). Tracked separately as they
@@ -90,50 +90,41 @@ class AppLifecycleCollector @Inject constructor(
 
                     val displayType = if (displayId in PHYSICAL_DISPLAY_IDS) "physical" else "virtual"
 
-                    if (previous != null) {
-                        logger.d(
-                            TAG,
-                            "Activity paused: display=$displayId ($displayType)" +
-                                " pkg=${previous.packageName} cls=${previous.className}",
-                        )
-                        telemetry.send(
-                            TelemetryEvent(
-                                signalId = signalId,
-                                payload = mapOf(
-                                    "actionName" to "AppLifecycle_Paused",
-                                    "trigger" to "user",
-                                    "metadata" to mapOf(
-                                        "package" to previous.packageName,
-                                        "class" to previous.className,
-                                        "displayId" to displayId,
-                                        "displayType" to displayType,
-                                    ),
-                                ),
-                            ),
+                    val previousMap: Map<String, Any>? = previous?.let {
+                        mapOf(
+                            "package" to it.packageName,
+                            "class" to it.className,
+                            "displayId" to displayId,
+                            "displayType" to displayType,
                         )
                     }
-                    if (current != null) {
-                        logger.d(
-                            TAG,
-                            "Activity resumed: display=$displayId ($displayType)" +
-                                " pkg=${current.packageName} cls=${current.className}",
-                        )
-                        telemetry.send(
-                            TelemetryEvent(
-                                signalId = signalId,
-                                payload = mapOf(
-                                    "actionName" to "AppLifecycle_Resumed",
-                                    "trigger" to "user",
-                                    "metadata" to mapOf(
-                                        "package" to current.packageName,
-                                        "class" to current.className,
-                                        "displayId" to displayId,
-                                        "displayType" to displayType,
-                                    ),
-                                ),
-                            ),
+                    val currentMap: Map<String, Any>? = current?.let {
+                        mapOf(
+                            "package" to it.packageName,
+                            "class" to it.className,
+                            "displayId" to displayId,
+                            "displayType" to displayType,
                         )
                     }
+
+                    logger.d(
+                        TAG,
+                        "Focus changed: display=$displayId ($displayType)" +
+                            " ${previous?.packageName ?: "null"} → ${current?.packageName ?: "null"}",
+                    )
+                    telemetry.send(
+                        TelemetryEvent(
+                            signalId = signalId,
+                            payload = mapOf(
+                                "actionName" to "AppLifecycle_FocusChanged",
+                                "trigger" to "user",
+                                "metadata" to mapOf(
+                                    "previous" to previousMap,
+                                    "current" to currentMap,
+                                ),
+                            ),
+                        ),
+                    )
                 }
 
                 // Update state: replace with current snapshot.

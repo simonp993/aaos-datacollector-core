@@ -32,9 +32,17 @@ class SensorBatteryCollector @Inject constructor(
     private var sensorManager: SensorManager? = null
     private val sensorListeners = mutableListOf<SensorEventListener>()
 
+    // Batched sensor samples: [timestampMillis, x, y, z] or [timestampMillis, lux]
+    private val accelSamples = mutableListOf<List<Any>>()
+    private val gyroSamples = mutableListOf<List<Any>>()
+    private val lightSamples = mutableListOf<List<Any>>()
+
+    // Batched battery samples: [timestampMillis, level, charging, tempTenthsC, status]
+    private val batterySamples = mutableListOf<List<Any>>()
+
     override suspend fun start() {
         running = true
-        logger.i(TAG, "Starting sensor and battery monitoring")
+        logger.i(TAG, "Starting sensor and battery monitoring (batched, ${SAMPLE_INTERVAL_MS * SAMPLES_PER_BATCH / 1000}s flush)")
 
         val sm = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
         sensorManager = sm
@@ -43,10 +51,18 @@ class SensorBatteryCollector @Inject constructor(
         registerSensor(sm, Sensor.TYPE_GYROSCOPE, "gyroscope")
         registerSensor(sm, Sensor.TYPE_LIGHT, "ambient_light")
 
-        // Poll battery state
+        // Poll battery every 5s, flush all batches every 60s
+        var sampleCount = 0
         while (running && coroutineContext.isActive) {
-            collectBatteryState()
-            delay(POLL_INTERVAL_MS)
+            collectBatterySample()
+            sampleCount++
+
+            if (sampleCount >= SAMPLES_PER_BATCH) {
+                flushBattery()
+                flushSensors()
+                sampleCount = 0
+            }
+            delay(SAMPLE_INTERVAL_MS)
         }
     }
 
@@ -70,59 +86,130 @@ class SensorBatteryCollector @Inject constructor(
 
         val listener = object : SensorEventListener {
             override fun onSensorChanged(event: SensorEvent) {
-                val action = label.split("_")
-                    .joinToString("") { it.replaceFirstChar(Char::uppercase) }
-                telemetry.send(
-                    TelemetryEvent(
-                        signalId = signalId,
-                        payload = mapOf(
-                            "actionName" to "Sensor_${action}Changed",
-                            "trigger" to "system",
-                            "metadata" to mapOf(
-                                "values" to event.values.toList(),
-                                "accuracy" to event.accuracy,
-                            ),
-                        ),
-                    ),
-                )
+                val ts = System.currentTimeMillis()
+                when (event.sensor.type) {
+                    Sensor.TYPE_ACCELEROMETER -> synchronized(accelSamples) {
+                        accelSamples.add(
+                            listOf(ts, event.values[0], event.values[1], event.values[2]),
+                        )
+                    }
+                    Sensor.TYPE_GYROSCOPE -> synchronized(gyroSamples) {
+                        gyroSamples.add(
+                            listOf(ts, event.values[0], event.values[1], event.values[2]),
+                        )
+                    }
+                    Sensor.TYPE_LIGHT -> synchronized(lightSamples) {
+                        lightSamples.add(listOf(ts, event.values[0]))
+                    }
+                }
             }
 
-            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
-                // No-op
-            }
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) { /* no-op */ }
         }
         sensorListeners.add(listener)
         sm.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
     }
 
-    private fun collectBatteryState() {
+    private fun collectBatterySample() {
         val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         if (intent != null) {
             val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
             val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
             val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
             val temperature = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1)
+            val pct = if (scale > 0) (level * 100 / scale) else -1
+            val charging = status == BatteryManager.BATTERY_STATUS_CHARGING
 
-            telemetry.send(
-                TelemetryEvent(
-                    signalId = signalId,
-                    payload = mapOf(
-                        "actionName" to "Battery_StatePolled",
-                        "trigger" to "system",
-                        "metadata" to mapOf(
-                            "level" to if (scale > 0) (level * 100 / scale) else -1,
-                            "charging" to (status == BatteryManager.BATTERY_STATUS_CHARGING),
-                            "temperatureTenthsC" to temperature,
-                            "status" to status,
+            batterySamples.add(
+                listOf(System.currentTimeMillis(), pct, charging, temperature, status),
+            )
+        }
+    }
+
+    private fun flushBattery() {
+        if (batterySamples.isEmpty()) return
+        telemetry.send(
+            TelemetryEvent(
+                signalId = signalId,
+                payload = mapOf(
+                    "actionName" to "Battery_StatePolled",
+                    "trigger" to "heartbeat",
+                    "metadata" to mapOf(
+                        "sampleSchema" to listOf(
+                            "timestampMillis",
+                            "level",
+                            "charging",
+                            "temperatureTenthsC",
+                            "status",
                         ),
+                        "samples" to batterySamples.toList(),
                     ),
                 ),
-            )
+            ),
+        )
+        batterySamples.clear()
+    }
+
+    private fun flushSensors() {
+        synchronized(accelSamples) {
+            if (accelSamples.isNotEmpty()) {
+                telemetry.send(
+                    TelemetryEvent(
+                        signalId = signalId,
+                        payload = mapOf(
+                            "actionName" to "Sensor_AccelerometerPolled",
+                            "trigger" to "heartbeat",
+                            "metadata" to mapOf(
+                                "sampleSchema" to listOf("timestampMillis", "x", "y", "z"),
+                                "samples" to accelSamples.toList(),
+                            ),
+                        ),
+                    ),
+                )
+                accelSamples.clear()
+            }
+        }
+        synchronized(gyroSamples) {
+            if (gyroSamples.isNotEmpty()) {
+                telemetry.send(
+                    TelemetryEvent(
+                        signalId = signalId,
+                        payload = mapOf(
+                            "actionName" to "Sensor_GyroscopePolled",
+                            "trigger" to "heartbeat",
+                            "metadata" to mapOf(
+                                "sampleSchema" to listOf("timestampMillis", "x", "y", "z"),
+                                "samples" to gyroSamples.toList(),
+                            ),
+                        ),
+                    ),
+                )
+                gyroSamples.clear()
+            }
+        }
+        synchronized(lightSamples) {
+            if (lightSamples.isNotEmpty()) {
+                telemetry.send(
+                    TelemetryEvent(
+                        signalId = signalId,
+                        payload = mapOf(
+                            "actionName" to "Sensor_AmbientLightPolled",
+                            "trigger" to "heartbeat",
+                            "metadata" to mapOf(
+                                "sampleSchema" to listOf("timestampMillis", "lux"),
+                                "samples" to lightSamples.toList(),
+                            ),
+                        ),
+                    ),
+                )
+                lightSamples.clear()
+            }
         }
     }
 
     companion object {
         private const val TAG = "SensorBatteryCollector"
-        private const val POLL_INTERVAL_MS = 5_000L
+        private const val SAMPLE_INTERVAL_MS = 5_000L
+        private const val SAMPLES_PER_BATCH = 12 // 12 × 5s = 60s flush
     }
 }

@@ -23,6 +23,10 @@ class DriveStateCollector @Inject constructor(
     @Volatile
     private var running = false
 
+    // Previous state tracking for prev/current payloads
+    private var previousSpeed: Map<String, Any>? = null
+    private var previousBrake: Map<String, Any>? = null
+
     override suspend fun start() {
         running = true
         coroutineScope {
@@ -41,6 +45,12 @@ class DriveStateCollector @Inject constructor(
             .catch { e -> logger.w(TAG, "Failed to observe vehicle speed", e) }
             .collect { speed ->
                 if (!running) return@collect
+                val current = mapOf(
+                    "speedMps" to speed,
+                    "speedKmh" to (speed * 3.6f),
+                    "moving" to (speed > 0f),
+                )
+                if (current == previousSpeed) return@collect
                 telemetry.send(
                     TelemetryEvent(
                         signalId = signalId,
@@ -48,13 +58,13 @@ class DriveStateCollector @Inject constructor(
                             "actionName" to "DriveState_SpeedChanged",
                             "trigger" to "system",
                             "metadata" to mapOf(
-                                "speedMps" to speed,
-                                "speedKmh" to (speed * 3.6f),
-                                "moving" to (speed > 0f),
+                                "previous" to previousSpeed,
+                                "current" to current,
                             ),
                         ),
                     ),
                 )
+                previousSpeed = current
             }
     }
 
@@ -63,16 +73,22 @@ class DriveStateCollector @Inject constructor(
             .catch { e -> logger.w(TAG, "Failed to observe parking brake", e) }
             .collect { parked ->
                 if (!running) return@collect
+                val current = mapOf("parked" to parked)
+                if (current == previousBrake) return@collect
                 telemetry.send(
                     TelemetryEvent(
                         signalId = signalId,
                         payload = mapOf(
                             "actionName" to "DriveState_ParkingBrakeChanged",
                             "trigger" to "system",
-                            "metadata" to mapOf("parked" to parked),
+                            "metadata" to mapOf(
+                                "previous" to previousBrake,
+                                "current" to current,
+                            ),
                         ),
                     ),
                 )
+                previousBrake = current
             }
     }
 

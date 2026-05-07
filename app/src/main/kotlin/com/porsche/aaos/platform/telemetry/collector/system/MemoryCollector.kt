@@ -15,7 +15,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.time.Instant
 import javax.inject.Inject
 
 class MemoryCollector @Inject constructor(
@@ -46,10 +45,10 @@ class MemoryCollector @Inject constructor(
             while (isActive) {
                 activityManager.getMemoryInfo(memInfo)
 
-                // Compact: [epochSec, availMb, trimLevel, lowMemory]
+                // Compact: [timestampMillis, availMb, trimLevel, lowMemory]
                 samples.add(
                     listOf(
-                        Instant.now().epochSecond,
+                        System.currentTimeMillis(),
                         memInfo.availMem / 1_048_576,
                         previousLevel ?: -1,
                         if (memInfo.lowMemory) 1 else 0,
@@ -62,10 +61,10 @@ class MemoryCollector @Inject constructor(
                             signalId = signalId,
                             payload = mapOf(
                                 "actionName" to "Memory_LevelCurrent",
-                                "trigger" to "system",
+                                "trigger" to "heartbeat",
                                 "metadata" to mapOf(
                                     "totalMem" to totalMem,
-                                    "sampleSchema" to listOf("epochSec", "availMb", "trimLevel", "lowMemory"),
+                                    "sampleSchema" to listOf("timestampMillis", "availMb", "trimLevel", "lowMemory"),
                                     "samples" to samples.toList(),
                                 ),
                             ),
