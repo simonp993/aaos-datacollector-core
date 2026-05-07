@@ -13,6 +13,7 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -210,6 +211,20 @@ SESSION_RANGES = sorted(
     key=lambda x: x[0],
 )
 
+# Pre-compute datetime session ranges for gap detection
+SESSION_DT_RANGES = [
+    (pd.to_datetime(s, unit="ms"), pd.to_datetime(e, unit="ms"))
+    for s, e in SESSION_RANGES
+]
+
+
+def _session_end_for(dt):
+    """Return the end of the session containing *dt*, or *dt* itself."""
+    for s_dt, e_dt in SESSION_DT_RANGES:
+        if s_dt <= dt <= e_dt:
+            return e_dt
+    return dt
+
 
 def _build_range_selector_fig():
     """Build a plotly figure with session bars and a built-in rangeslider for time selection."""
@@ -400,6 +415,9 @@ app.layout = html.Div(
 
         # Chart content
         html.Div(id="tab-content", style={"minHeight": "600px"}),
+
+        # Hidden store for global graph zoom synchronization
+        dcc.Store(id="graph-zoom", data=None),
     ],
 )
 
@@ -442,6 +460,26 @@ def _graph(fig, height=400):
     return dcc.Graph(figure=fig, config={"displayModeBar": True, "displaylogo": False})
 
 
+# Synced-graph counter — all time-based graphs use a pattern-matching ID
+_synced_counter: list[int] = [0]
+
+
+def _synced_graph(fig, height=400, zoom_range=None):
+    """Graph with a pattern-matching ID so zoom syncs across all tabs."""
+    _apply_theme(fig, height)
+    _apply_zoom(fig, zoom_range)
+    idx = _synced_counter[0]
+    _synced_counter[0] += 1
+    gid = {"type": "synced-graph", "index": idx}
+    return dcc.Graph(id=gid, figure=fig, config={"displayModeBar": True, "displaylogo": False})
+
+
+def _apply_zoom(fig, zoom_range):
+    """Apply a zoom override to a figure's primary x-axis if set."""
+    if zoom_range:
+        fig.update_layout(xaxis=dict(range=zoom_range, autorange=False))
+
+
 # Consistent margins for timeline charts so x-axes align
 _TIMELINE_MARGIN = dict(l=120, r=60, t=90, b=30)
 
@@ -449,12 +487,13 @@ _TIMELINE_MARGIN = dict(l=120, r=60, t=90, b=30)
 _timeline_ids: list[str] = []
 
 
-def _timeline_graph(fig, height=400):
+def _timeline_graph(fig, height=400, zoom_range=None):
     _apply_theme(fig, height)
     fig.update_layout(margin=_TIMELINE_MARGIN)
-    idx = len(_timeline_ids)
-    gid = {"type": "tl-graph", "index": idx}
-    _timeline_ids.append(gid)
+    _apply_zoom(fig, zoom_range)
+    idx = _synced_counter[0]
+    _synced_counter[0] += 1
+    gid = {"type": "synced-graph", "index": idx}
     return dcc.Graph(id=gid, figure=fig, config={"displayModeBar": True, "displaylogo": False})
 
 
@@ -481,8 +520,9 @@ def _full(*children):
     Input("app-filter", "value"),
     Input("trigger-filter", "value"),
     Input("section-tabs", "value"),
+    Input("graph-zoom", "data"),
 )
-def update_dashboard(relayout_data, displays, apps, triggers, active_tab):
+def update_dashboard(relayout_data, displays, apps, triggers, active_tab, zoom_data):
     # Determine time range from the rangeslider
     start_ts, end_ts = MIN_TS, MAX_TS
     if relayout_data:
@@ -542,74 +582,70 @@ def update_dashboard(relayout_data, displays, apps, triggers, active_tab):
         _make_kpi_card(app_switches, "App Switches"),
     ]
 
+    # Reset synced graph counter for this render
+    _synced_counter[0] = 0
+
+    # Parse zoom override from graph-zoom store
+    zoom_range = None
+    if zoom_data and isinstance(zoom_data, list) and len(zoom_data) == 2:
+        zoom_range = zoom_data
+
     # Tab content
     if active_tab == "timeline":
-        content = _build_timeline_tab(events, dfs, displays)
+        content = _build_timeline_tab(events, dfs, displays, zoom_range)
     elif active_tab == "overview":
-        content = _build_overview_tab(events, dfs)
+        content = _build_overview_tab(events, dfs, zoom_range)
     elif active_tab == "app_usage":
-        content = _build_app_usage_tab(dfs, displays, apps)
+        content = _build_app_usage_tab(dfs, displays, apps, zoom_range)
     elif active_tab == "touch":
-        content = _build_touch_tab(dfs, displays)
+        content = _build_touch_tab(dfs, displays, zoom_range)
     elif active_tab == "performance":
-        content = _build_performance_tab(dfs)
+        content = _build_performance_tab(dfs, zoom_range)
     elif active_tab == "network":
-        content = _build_network_tab(dfs, apps)
+        content = _build_network_tab(dfs, apps, zoom_range)
     elif active_tab == "vehicle":
-        content = _build_vehicle_tab(dfs)
+        content = _build_vehicle_tab(dfs, zoom_range)
     else:
         content = html.P("Select a tab")
 
     return cards, content, range_label
 
 
-# Sync zoom across all timeline charts via pattern-matching callback
+# Sync zoom: any synced graph zoom updates the global store
 @callback(
-    Output({"type": "tl-graph", "index": ALL}, "figure"),
-    Input({"type": "tl-graph", "index": ALL}, "relayoutData"),
-    State({"type": "tl-graph", "index": ALL}, "figure"),
+    Output("graph-zoom", "data"),
+    Input({"type": "synced-graph", "index": ALL}, "relayoutData"),
+    State("graph-zoom", "data"),
     prevent_initial_call=True,
 )
-def sync_timeline_zoom(relayout_list, figures):
+def sync_graph_zoom(relayout_list, current_zoom):
     triggered_id = ctx.triggered_id
     if not triggered_id or not isinstance(triggered_id, dict):
-        return [no_update] * len(figures)
+        return no_update
 
     idx = triggered_id.get("index")
     if idx is None or idx >= len(relayout_list):
-        return [no_update] * len(figures)
+        return no_update
 
     relayout = relayout_list[idx]
     if not relayout:
-        return [no_update] * len(figures)
+        return no_update
+
+    # Check autorange / home button FIRST (before range)
+    if relayout.get("xaxis.autorange"):
+        return None
 
     x0 = relayout.get("xaxis.range[0]")
     x1 = relayout.get("xaxis.range[1]")
-
     if x0 is not None and x1 is not None:
-        patches = []
-        for i in range(len(figures)):
-            if i == idx:
-                patches.append(no_update)
-            else:
-                p = Patch()
-                p["layout"]["xaxis"]["range"] = [x0, x1]
-                p["layout"]["xaxis"]["autorange"] = False
-                patches.append(p)
-        return patches
+        # If range matches what's already stored, this is a double-click reset
+        # (plotly restoring to the baked-in initial range)
+        if current_zoom and len(current_zoom) == 2:
+            if str(x0) == str(current_zoom[0]) and str(x1) == str(current_zoom[1]):
+                return None
+        return [x0, x1]
 
-    if relayout.get("xaxis.autorange"):
-        patches = []
-        for i in range(len(figures)):
-            if i == idx:
-                patches.append(no_update)
-            else:
-                p = Patch()
-                p["layout"]["xaxis"]["autorange"] = True
-                patches.append(p)
-        return patches
-
-    return [no_update] * len(figures)
+    return no_update
 
 
 # ---------------------------------------------------------------------------
@@ -617,7 +653,7 @@ def sync_timeline_zoom(relayout_list, figures):
 # ---------------------------------------------------------------------------
 
 
-def _build_timeline_tab(events, dfs, displays):
+def _build_timeline_tab(events, dfs, displays, zoom_range=None):
     """Unified stacked timeline: separate figures for app, touches, FPS, memory, network."""
     _timeline_ids.clear()
     children = []
@@ -651,19 +687,6 @@ def _build_timeline_tab(events, dfs, displays):
 
         fig_app = go.Figure()
         legend_added = set()
-
-        # Build session datetime ranges for gap detection
-        session_dt_ranges = [
-            (pd.to_datetime(s, unit="ms"), pd.to_datetime(e, unit="ms"))
-            for s, e in SESSION_RANGES
-        ]
-
-        def _session_end_for(dt):
-            """Return the end of the session containing dt, or dt itself if not in any session."""
-            for s_dt, e_dt in session_dt_ranges:
-                if s_dt <= dt <= e_dt:
-                    return e_dt
-            return dt
 
         for idx, did in enumerate(active_displays):
             df_d = df_focus[df_focus["display_id"] == did].reset_index(drop=True)
@@ -713,7 +736,7 @@ def _build_timeline_tab(events, dfs, displays):
             height=80 * n_disp + 120,
             legend=dict(orientation="h", y=1.0, yanchor="bottom", x=0, font=dict(size=9)),
         )
-        children.append(_full(_timeline_graph(fig_app, 80 * n_disp + 120)))
+        children.append(_full(_timeline_graph(fig_app, 80 * n_disp + 120, zoom_range)))
 
     # --- 2) Touch Rate (bars per 5s) ---
     touch_actions = ["Touch_Down", "Touch_Swipe"]
@@ -743,7 +766,7 @@ def _build_timeline_tab(events, dfs, displays):
                 legend=dict(orientation="h", y=1.0, yanchor="bottom", x=0, font=dict(size=9)),
                 xaxis=dict(range=[x_min, x_max]),
             )
-            children.append(_full(_timeline_graph(fig_touch, 250)))
+            children.append(_full(_timeline_graph(fig_touch, 250, zoom_range)))
 
     # --- 3) Dropped Frames ---
     df_fps = dfs.get("Display_FrameRate", pd.DataFrame())
@@ -760,7 +783,7 @@ def _build_timeline_tab(events, dfs, displays):
                 legend=dict(orientation="h", y=1.0, yanchor="bottom", x=0, font=dict(size=9)),
                 xaxis=dict(range=[x_min, x_max]),
             )
-            children.append(_full(_timeline_graph(fig_dropped, 250)))
+            children.append(_full(_timeline_graph(fig_dropped, 250, zoom_range)))
 
     # --- 4) Available Memory ---
     df_mem = dfs.get("Memory_Usage", pd.DataFrame())
@@ -792,7 +815,7 @@ def _build_timeline_tab(events, dfs, displays):
                 legend=dict(orientation="h", y=1.0, yanchor="bottom", x=0, font=dict(size=9)),
                 xaxis=dict(range=[x_min, x_max]),
             )
-            children.append(_full(_timeline_graph(fig_mem, 250)))
+            children.append(_full(_timeline_graph(fig_mem, 250, zoom_range)))
 
     # --- 5) Network Traffic per app (stacked bars per 60s window) ---
     df_perapp = dfs.get("Network_PerAppTraffic", pd.DataFrame())
@@ -846,18 +869,15 @@ def _build_timeline_tab(events, dfs, displays):
                     legend=dict(orientation="h", y=1.0, yanchor="bottom", x=0, font=dict(size=9)),
                     xaxis=dict(range=[x_min, x_max]),
                 )
-                children.append(_full(_timeline_graph(fig_net, 300)))
+                children.append(_full(_timeline_graph(fig_net, 300, zoom_range)))
 
     if not children or len(children) <= 1:
         children.append(html.P("Insufficient data for timeline.", style={"color": "#888"}))
 
-    # Add a hidden store for x-axis sync
-    children.append(dcc.Store(id="tl-xrange-store"))
-
     return html.Div(children)
 
 
-def _build_overview_tab(events, dfs):
+def _build_overview_tab(events, dfs, zoom_range=None):
     children = []
 
     # Event count by collector
@@ -935,7 +955,7 @@ def _build_overview_tab(events, dfs):
         )],
     )
 
-    children.append(_row(_graph(fig1, 450), _graph(fig_combined, 450)))
+    children.append(_row(_graph(fig1, 450), _synced_graph(fig_combined, 450, zoom_range)))
 
     # --- System Impact Section ---
     children.append(html.H3("System Impact",
@@ -1011,7 +1031,7 @@ def _build_overview_tab(events, dfs):
                     fig_ev_fps.update_yaxes(title_text="Events/min", secondary_y=False)
                     fig_ev_fps.update_yaxes(title_text="FPS / Drops", secondary_y=True)
 
-        children.append(_row(_graph(fig_ev_mem, 400), _graph(fig_ev_fps, 400)))
+        children.append(_row(_synced_graph(fig_ev_mem, 400, zoom_range), _synced_graph(fig_ev_fps, 400, zoom_range)))
 
         # Event Rate vs CPU (if available)
         df_cpu = dfs.get("CPU_Usage", pd.DataFrame())
@@ -1034,7 +1054,7 @@ def _build_overview_tab(events, dfs):
                     fig_ev_cpu.update_layout(title="Event Throughput vs CPU Usage")
                     fig_ev_cpu.update_yaxes(title_text="Events/min", secondary_y=False)
                     fig_ev_cpu.update_yaxes(title_text="CPU %", secondary_y=True)
-                    children.append(_full(_graph(fig_ev_cpu, 380)))
+                    children.append(_full(_synced_graph(fig_ev_cpu, 380, zoom_range)))
 
         # Self-Monitor (if available)
         df_self = dfs.get("SelfMonitor_Usage", pd.DataFrame())
@@ -1048,14 +1068,14 @@ def _build_overview_tab(events, dfs):
                                      x="datetime", y="cpuPct",
                                      title="DataCollector Own CPU (%)", markers=True)
                     fig_sm.update_traces(line=dict(color="#e74c3c"))
-                    sm_figs.append(_graph(fig_sm, 300))
+                    sm_figs.append(_synced_graph(fig_sm, 300, zoom_range))
                 if "memMb" in self_exp.columns:
                     self_exp["memMb"] = pd.to_numeric(self_exp["memMb"], errors="coerce")
                     fig_sm_m = px.line(self_exp.dropna(subset=["memMb"]),
                                        x="datetime", y="memMb",
                                        title="DataCollector Own Memory (MB)", markers=True)
                     fig_sm_m.update_traces(line=dict(color="#5b8def"))
-                    sm_figs.append(_graph(fig_sm_m, 300))
+                    sm_figs.append(_synced_graph(fig_sm_m, 300, zoom_range))
                 if len(sm_figs) >= 2:
                     children.append(_row(sm_figs[0], sm_figs[1]))
                 elif sm_figs:
@@ -1070,7 +1090,7 @@ def _build_overview_tab(events, dfs):
     return html.Div(children)
 
 
-def _build_app_usage_tab(dfs, displays, apps):
+def _build_app_usage_tab(dfs, displays, apps, zoom_range=None):
     df = dfs.get("App_FocusChanged")
     if df is None or df.empty:
         return html.P("No App_FocusChanged data available.", style={"color": "#888"})
@@ -1138,16 +1158,21 @@ def _build_app_usage_tab(dfs, displays, apps):
 
     for idx, did in enumerate(active_displays):
         df_disp = df_sorted[df_sorted["display_id"] == did].reset_index(drop=True)
-        if len(df_disp) < 2:
+        if df_disp.empty:
             continue
         y_val = idx
-        for i in range(len(df_disp) - 1):
+        for i in range(len(df_disp)):
             pkg = str(df_disp.iloc[i]["current_pkg"])
             short = _short_name(pkg)
             start = df_disp.iloc[i]["datetime"]
-            end = df_disp.iloc[i + 1]["datetime"]
+            session_end = _session_end_for(start)
+            if i + 1 < len(df_disp):
+                next_dt = df_disp.iloc[i + 1]["datetime"]
+                end = min(next_dt, session_end)
+            else:
+                end = session_end
             dur_s = (end - start).total_seconds()
-            if 0 < dur_s < 3600:
+            if 0 < dur_s < 86400:
                 color = app_color_map.get(short, "#888")
                 fig3.add_shape(
                     type="rect", x0=start, x1=end,
@@ -1184,7 +1209,7 @@ def _build_app_usage_tab(dfs, displays, apps):
     )
 
     children.append(_row(_graph(fig1, 400), _graph(fig2, 400)))
-    children.append(_full(_graph(fig3, 120 * n_disp + 100)))
+    children.append(_full(_synced_graph(fig3, 120 * n_disp + 100, zoom_range)))
 
     # Sankey: app transitions per display
     sankey_figs = []
@@ -1269,7 +1294,7 @@ def _build_app_usage_tab(dfs, displays, apps):
     return html.Div(children)
 
 
-def _build_touch_tab(dfs, displays):
+def _build_touch_tab(dfs, displays, zoom_range=None):
     touch_actions = ["Touch_Down", "Touch_Up", "Touch_Swipe"]
     touch_dfs = [dfs.get(a, pd.DataFrame()) for a in touch_actions if not dfs.get(a, pd.DataFrame()).empty]
     if not touch_dfs:
@@ -1309,31 +1334,51 @@ def _build_touch_tab(dfs, displays):
             fig_touch_fps.update_layout(title="Touch Rate vs Dropped Frames", barmode="stack")
             fig_touch_fps.update_yaxes(title_text="Touches/min", secondary_y=False)
             fig_touch_fps.update_yaxes(title_text="Dropped Frames", secondary_y=True)
-    children.append(_full(_graph(fig_touch_fps, 400)))
+    children.append(_full(_synced_graph(fig_touch_fps, 400, zoom_range)))
 
     # --- 2) Touch Heatmaps — one per row, fixed aspect ratio ---
     heatmap_actions = ["Touch_Down", "Touch_Swipe"]
     heatmap_dfs = [dfs.get(a, pd.DataFrame()) for a in heatmap_actions if not dfs.get(a, pd.DataFrame()).empty]
     df_heatmap = pd.concat(heatmap_dfs, ignore_index=True) if heatmap_dfs else pd.DataFrame()
 
+    # Filter heatmap data by zoom range if set
+    if not df_heatmap.empty and zoom_range and "datetime" in df_heatmap.columns:
+        z_start = pd.to_datetime(zoom_range[0])
+        z_end = pd.to_datetime(zoom_range[1])
+        df_heatmap = df_heatmap[(df_heatmap["datetime"] >= z_start) & (df_heatmap["datetime"] <= z_end)]
+
     if not df_heatmap.empty and "displayId" in df_heatmap.columns:
+        # Pre-compute global max bin count for shared color scale
+        global_zmax = 0
+        heatmap_data = []
         for did in sorted(displays):
             if did in TOUCH_EXCLUDED_DISPLAYS:
                 continue
             df_disp = df_heatmap[df_heatmap["displayId"] == did]
             if df_disp.empty or "x" not in df_disp.columns:
                 continue
-            name = DISPLAY_NAMES.get(did, f"Display {did}")
             res = DISPLAY_RESOLUTIONS.get(did, (1920, 720))
             n = len(df_disp)
             bin_size = 80 if n < 50 else (40 if n < 200 else 20)
+            nbx = max(10, res[0] // bin_size)
+            nby = max(8, res[1] // bin_size)
+            h, _, _ = np.histogram2d(df_disp["x"].tolist(), df_disp["y"].tolist(),
+                                     bins=[nbx, nby],
+                                     range=[[0, res[0]], [0, res[1]]])
+            local_max = float(h.max()) if h.size > 0 else 0
+            global_zmax = max(global_zmax, local_max)
+            heatmap_data.append((did, df_disp, res, n, bin_size, nbx, nby))
+
+        for did, df_disp, res, n, bin_size, nbx, nby in heatmap_data:
+            name = DISPLAY_NAMES.get(did, f"Display {did}")
             fig = go.Figure()
             fig.add_trace(go.Histogram2d(
                 x=df_disp["x"].tolist(), y=df_disp["y"].tolist(),
-                nbinsx=max(10, res[0] // bin_size), nbinsy=max(8, res[1] // bin_size),
+                nbinsx=nbx, nbinsy=nby,
                 colorscale=[[0, "rgba(30,30,50,0)"], [0.15, "#4575b4"], [0.35, "#91bfdb"],
                             [0.5, "#fee090"], [0.7, "#fc8d59"], [1.0, "#d73027"]],
                 zsmooth="best",
+                zmin=0, zmax=global_zmax if global_zmax > 0 else None,
             ))
             fig.add_shape(type="rect", x0=0, y0=0, x1=res[0], y1=res[1],
                           line=dict(color="#555", width=2))
@@ -1349,7 +1394,7 @@ def _build_touch_tab(dfs, displays):
     return html.Div(children)
 
 
-def _build_performance_tab(dfs):
+def _build_performance_tab(dfs, zoom_range=None):
     children = []
 
     # Memory
@@ -1371,7 +1416,7 @@ def _build_performance_tab(dfs):
                                   annotation_text=f"Total: {total_mb:.0f} MB")
             fig_mem.update_layout(title="Memory Over Time", yaxis_title="MB")
 
-    children.append(_full(_graph(fig_mem, 380)))
+    children.append(_full(_synced_graph(fig_mem, 380, zoom_range)))
 
     # Dropped Frames (own row)
     df_fps = dfs.get("Display_FrameRate", pd.DataFrame())
@@ -1384,7 +1429,7 @@ def _build_performance_tab(dfs):
                 name="Dropped Frames", marker_color="rgba(231,76,60,0.85)",
             ))
             fig_dropped.update_layout(title="Dropped Frames", yaxis_title="Frames")
-            children.append(_full(_graph(fig_dropped, 350)))
+            children.append(_full(_synced_graph(fig_dropped, 350, zoom_range)))
 
     # CPU Usage
     df_cpu = dfs.get("CPU_Usage", pd.DataFrame())
@@ -1405,7 +1450,7 @@ def _build_performance_tab(dfs):
                                    x="datetime", y="loadAvg1min",
                                    title="1-min Load Average", markers=True)
                 fig_load.update_traces(line=dict(color="#9b59b6"))
-            children.append(_row(_graph(fig_cpu, 350), _graph(fig_load, 350)))
+            children.append(_row(_synced_graph(fig_cpu, 350, zoom_range), _synced_graph(fig_load, 350, zoom_range)))
 
     # Storage Usage
     df_stor = dfs.get("Storage_Usage", pd.DataFrame())
@@ -1428,7 +1473,7 @@ def _build_performance_tab(dfs):
             fig_stor.update_yaxes(title_text="Usage %", range=[0, 100], secondary_y=True)
         fig_stor.update_layout(title="Storage Usage Over Time")
         fig_stor.update_yaxes(title_text="GB", secondary_y=False)
-        children.append(_full(_graph(fig_stor, 350)))
+        children.append(_full(_synced_graph(fig_stor, 350, zoom_range)))
 
     # Battery
     df_batt = dfs.get("Battery_Level", pd.DataFrame())
@@ -1441,12 +1486,12 @@ def _build_performance_tab(dfs):
                                title="Battery Level (%)", markers=True)
             fig_batt.update_traces(line=dict(color="#2ecc71"))
             fig_batt.update_layout(yaxis=dict(range=[0, 105]))
-            children.append(_full(_graph(fig_batt, 280)))
+            children.append(_full(_synced_graph(fig_batt, 280, zoom_range)))
 
     return html.Div(children)
 
 
-def _build_network_tab(dfs, apps):
+def _build_network_tab(dfs, apps, zoom_range=None):
     children = []
 
     # Signal strength
@@ -1479,7 +1524,7 @@ def _build_network_tab(dfs, apps):
             fig_quality.update_yaxes(title_text="Quality (%)", range=[0, 105], secondary_y=False)
             fig_quality.update_yaxes(title_text="Mbps", secondary_y=True)
 
-    children.append(_row(_graph(fig_signal, 350), _graph(fig_quality, 350)))
+    children.append(_row(_synced_graph(fig_signal, 350, zoom_range), _synced_graph(fig_quality, 350, zoom_range)))
 
     # Total traffic
     df_wifi = dfs.get("Network_WifiTotal", pd.DataFrame())
@@ -1526,7 +1571,7 @@ def _build_network_tab(dfs, apps):
             fig_perapp.update_layout(title="Per-App Traffic (MB)", barmode="group",
                                      height=max(300, len(df_t) * 45), xaxis_title="MB")
 
-    children.append(_row(_graph(fig_traffic, 350), _graph(fig_perapp, max(350, len(app_totals) * 40))))
+    children.append(_row(_synced_graph(fig_traffic, 350, zoom_range), _graph(fig_perapp, max(350, len(app_totals) * 40))))
 
     # App Lifecycle vs Network Traffic
     df_focus_lc = dfs.get("App_FocusChanged", pd.DataFrame())
@@ -1594,12 +1639,12 @@ def _build_network_tab(dfs, apps):
                 fig_lifecycle.update_layout(
                     title="App Lifecycle vs Network Traffic (shaded = foreground per display)",
                     height=180 * n_lc + 80)
-    children.append(_full(_graph(fig_lifecycle, 180 * 6 + 80)))
+    children.append(_full(_synced_graph(fig_lifecycle, 180 * 6 + 80, zoom_range)))
 
     return html.Div(children)
 
 
-def _build_vehicle_tab(dfs):
+def _build_vehicle_tab(dfs, zoom_range=None):
     children = []
     df_vhal = dfs.get("VHAL_ValuesChanged", pd.DataFrame())
     fig_speed = go.Figure()
@@ -1635,7 +1680,7 @@ def _build_vehicle_tab(dfs):
                                       title="Gear Selection", text="gear")
                 fig_gear.update_traces(marker=dict(size=12))
 
-    children.append(_row(_graph(fig_speed, 350), _graph(fig_gear, 250)))
+    children.append(_row(_synced_graph(fig_speed, 350, zoom_range), _synced_graph(fig_gear, 250, zoom_range)))
 
     # GPS / Location
     df_loc = dfs.get("Location_Position", pd.DataFrame())
@@ -1673,7 +1718,7 @@ def _build_vehicle_tab(dfs):
                                      title="Altitude (m)", markers=True)
                     fig_alt.update_traces(line=dict(color="#5b8def"))
 
-                children.append(_row(_graph(fig_speed_gps, 300), _graph(fig_alt, 300)))
+                children.append(_row(_synced_graph(fig_speed_gps, 300, zoom_range), _synced_graph(fig_alt, 300, zoom_range)))
 
             # Accuracy
             if "accuracyMeters" in loc_exp.columns:
@@ -1682,7 +1727,7 @@ def _build_vehicle_tab(dfs):
                                  x="datetime", y="accuracyMeters",
                                  title="GPS Accuracy (m)", markers=True)
                 fig_acc.update_traces(line=dict(color="#f39c12"))
-                children.append(_full(_graph(fig_acc, 250)))
+                children.append(_full(_synced_graph(fig_acc, 250, zoom_range)))
 
     # CPU Usage
     df_cpu = dfs.get("CPU_Usage", pd.DataFrame())
@@ -1695,7 +1740,7 @@ def _build_vehicle_tab(dfs):
                               title="System CPU Usage (%)", markers=True)
             fig_cpu.update_traces(line=dict(color="#e74c3c"))
             fig_cpu.add_hline(y=100, line_dash="dash", line_color="gray")
-            children.append(_full(_graph(fig_cpu, 350)))
+            children.append(_full(_synced_graph(fig_cpu, 350, zoom_range)))
 
             if "loadAvg1min" in cpu_exp.columns:
                 cpu_exp["loadAvg1min"] = pd.to_numeric(cpu_exp["loadAvg1min"], errors="coerce")
@@ -1703,7 +1748,7 @@ def _build_vehicle_tab(dfs):
                                    x="datetime", y="loadAvg1min",
                                    title="1-min Load Average", markers=True)
                 fig_load.update_traces(line=dict(color="#9b59b6"))
-                children.append(_full(_graph(fig_load, 250)))
+                children.append(_full(_synced_graph(fig_load, 250, zoom_range)))
 
     # Self-Monitor
     df_self = dfs.get("SelfMonitor_Usage", pd.DataFrame())
@@ -1717,14 +1762,14 @@ def _build_vehicle_tab(dfs):
                                      x="datetime", y="cpuPct",
                                      title="DataCollector CPU (%)", markers=True)
                 fig_sm_cpu.update_traces(line=dict(color="#e74c3c"))
-                sm_figs.append(_graph(fig_sm_cpu, 300))
+                sm_figs.append(_synced_graph(fig_sm_cpu, 300, zoom_range))
             if "memMb" in self_exp.columns:
                 self_exp["memMb"] = pd.to_numeric(self_exp["memMb"], errors="coerce")
                 fig_sm_mem = px.line(self_exp.dropna(subset=["memMb"]),
                                      x="datetime", y="memMb",
                                      title="DataCollector Memory (MB)", markers=True)
                 fig_sm_mem.update_traces(line=dict(color="#0f9b8e"))
-                sm_figs.append(_graph(fig_sm_mem, 300))
+                sm_figs.append(_synced_graph(fig_sm_mem, 300, zoom_range))
             if len(sm_figs) >= 2:
                 children.append(_row(sm_figs[0], sm_figs[1]))
             elif sm_figs:
@@ -1736,7 +1781,7 @@ def _build_vehicle_tab(dfs):
                                       x="datetime", y="threadCount",
                                       title="DataCollector Threads", markers=True)
                 fig_threads.update_traces(line=dict(color="#5b8def"))
-                children.append(_full(_graph(fig_threads, 250)))
+                children.append(_full(_synced_graph(fig_threads, 250, zoom_range)))
 
     return html.Div(children)
 
