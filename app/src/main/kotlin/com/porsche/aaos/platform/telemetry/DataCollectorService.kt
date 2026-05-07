@@ -78,6 +78,11 @@ class DataCollectorService : Service() {
      * DONE G2: Consistent timestamps — all use epochMillis (Long). Removed epochSec, iso8601.
      * DONE G5: Stagger cyclic collectors — deterministic offsets (2–9s) added to all batched
      *          collectors. Reduces burst load on telemetry sink.
+     * 
+     * TODO G3: Make sure that all events that might not be changed often (e.g. CarInfo) are 
+     *          emitted at least once at startup, so we have that data point even if it doesn't change.
+     *          Change signals like audio_snapshot, to only send once, because one snapshot is enough 
+     *          because if nothing else is send after, we know that there was no change.
      *
      * TODO G3: Event correlation — add a shared session/correlation ID so events from the
      *          same drive session or time window can be linked across collectors.

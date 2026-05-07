@@ -111,10 +111,10 @@ class AudioCollector @Inject constructor(
             logger.w(TAG, "AudioDeviceCallback registration failed: ${e.message}")
         }
 
-        // Emit initial state once.
-        emitIfChanged(audioManager, carAudioManager)
+        // Emit initial snapshot once (sets lastEmittedState baseline for diffs).
+        emitState(audioManager, carAudioManager)
 
-        // Periodic re-emit every 60s regardless of change (debugging aid).
+        // Periodic snapshot every 60s regardless of change (debugging aid).
         // Callbacks still trigger immediate emission on actual changes.
         while (running && coroutineContext.isActive) {
             delay(KEEP_ALIVE_MS)
@@ -171,6 +171,15 @@ class AudioCollector @Inject constructor(
         debounceRunnable = null
         lastEmittedState = currentState
 
+        // current: only the changed fields/subfields (deep diff)
+        // previous: full state of changed top-level fields (so all volume groups are visible)
+        val changedCurrent = diffMaps(previous, currentState)
+        val changedPrevious = if (previous != null) {
+            previous.filterKeys { it in changedCurrent }
+        } else {
+            null
+        }
+
         telemetry.send(
             TelemetryEvent(
                 signalId = signalId,
@@ -178,12 +187,35 @@ class AudioCollector @Inject constructor(
                     "actionName" to "Audio_StateChanged",
                     "trigger" to "user",
                     "metadata" to mapOf(
-                        "previous" to previous,
-                        "current" to currentState,
+                        "previous" to changedPrevious,
+                        "current" to changedCurrent,
                     ),
                 ),
             ),
         )
+    }
+
+    /**
+     * Returns only the entries in [target] that differ from [baseline].
+     * For nested Map values, recurses to include only changed sub-keys.
+     */
+    @Suppress("UNCHECKED_CAST")
+    private fun diffMaps(baseline: Map<String, Any>?, target: Map<String, Any>): Map<String, Any> {
+        if (baseline == null) return target
+        return target.mapNotNull { (key, value) ->
+            val baseValue = baseline[key]
+            when {
+                baseValue == value -> null
+                value is Map<*, *> && baseValue is Map<*, *> -> {
+                    val subDiff = diffMaps(
+                        baseValue as Map<String, Any>,
+                        value as Map<String, Any>,
+                    )
+                    if (subDiff.isEmpty()) null else key to subDiff
+                }
+                else -> key to value
+            }
+        }.toMap()
     }
 
     private fun emitState(audioManager: AudioManager, cam: CarAudioManager?) {
@@ -193,12 +225,9 @@ class AudioCollector @Inject constructor(
             TelemetryEvent(
                 signalId = signalId,
                 payload = mapOf(
-                    "actionName" to "Audio_StateChanged",
+                    "actionName" to "Audio_Snapshot",
                     "trigger" to "heartbeat",
-                    "metadata" to mapOf(
-                        "previous" to null,
-                        "current" to currentState,
-                    ),
+                    "metadata" to currentState,
                 ),
             ),
         )
