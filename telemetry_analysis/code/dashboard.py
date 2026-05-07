@@ -18,7 +18,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from dash import Dash, Input, Output, callback, dcc, html
+from dash import Dash, Input, Output, State, callback, dcc, html, ALL, ctx, Patch, no_update
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -252,7 +252,7 @@ def _build_range_selector_fig():
 # Dash App
 # ---------------------------------------------------------------------------
 
-app = Dash(__name__)
+app = Dash(__name__, suppress_callback_exceptions=True)
 app.title = "AAOS Telemetry Dashboard"
 
 # Override Dash slider accent color via index_string
@@ -445,11 +445,17 @@ def _graph(fig, height=400):
 # Consistent margins for timeline charts so x-axes align
 _TIMELINE_MARGIN = dict(l=120, r=60, t=90, b=30)
 
+# Counter for assigning unique IDs to timeline graphs within a render
+_timeline_ids: list[str] = []
+
 
 def _timeline_graph(fig, height=400):
     _apply_theme(fig, height)
     fig.update_layout(margin=_TIMELINE_MARGIN)
-    return dcc.Graph(figure=fig, config={"displayModeBar": True, "displaylogo": False})
+    idx = len(_timeline_ids)
+    gid = {"type": "tl-graph", "index": idx}
+    _timeline_ids.append(gid)
+    return dcc.Graph(id=gid, figure=fig, config={"displayModeBar": True, "displaylogo": False})
 
 
 def _row(*children):
@@ -557,6 +563,55 @@ def update_dashboard(relayout_data, displays, apps, triggers, active_tab):
     return cards, content, range_label
 
 
+# Sync zoom across all timeline charts via pattern-matching callback
+@callback(
+    Output({"type": "tl-graph", "index": ALL}, "figure"),
+    Input({"type": "tl-graph", "index": ALL}, "relayoutData"),
+    State({"type": "tl-graph", "index": ALL}, "figure"),
+    prevent_initial_call=True,
+)
+def sync_timeline_zoom(relayout_list, figures):
+    triggered_id = ctx.triggered_id
+    if not triggered_id or not isinstance(triggered_id, dict):
+        return [no_update] * len(figures)
+
+    idx = triggered_id.get("index")
+    if idx is None or idx >= len(relayout_list):
+        return [no_update] * len(figures)
+
+    relayout = relayout_list[idx]
+    if not relayout:
+        return [no_update] * len(figures)
+
+    x0 = relayout.get("xaxis.range[0]")
+    x1 = relayout.get("xaxis.range[1]")
+
+    if x0 is not None and x1 is not None:
+        patches = []
+        for i in range(len(figures)):
+            if i == idx:
+                patches.append(no_update)
+            else:
+                p = Patch()
+                p["layout"]["xaxis"]["range"] = [x0, x1]
+                p["layout"]["xaxis"]["autorange"] = False
+                patches.append(p)
+        return patches
+
+    if relayout.get("xaxis.autorange"):
+        patches = []
+        for i in range(len(figures)):
+            if i == idx:
+                patches.append(no_update)
+            else:
+                p = Patch()
+                p["layout"]["xaxis"]["autorange"] = True
+                patches.append(p)
+        return patches
+
+    return [no_update] * len(figures)
+
+
 # ---------------------------------------------------------------------------
 # Tab Builders
 # ---------------------------------------------------------------------------
@@ -564,9 +619,10 @@ def update_dashboard(relayout_data, displays, apps, triggers, active_tab):
 
 def _build_timeline_tab(events, dfs, displays):
     """Unified stacked timeline: separate figures for app, touches, FPS, memory, network."""
+    _timeline_ids.clear()
     children = []
     children.append(html.P(
-        "Synchronized timeline — zoom any row independently to inspect correlations.",
+        "Synchronized timeline — zoom any chart to sync all others.",
         style={"color": "#888", "fontSize": "12px", "marginBottom": "8px"},
     ))
 
@@ -595,15 +651,34 @@ def _build_timeline_tab(events, dfs, displays):
 
         fig_app = go.Figure()
         legend_added = set()
+
+        # Build session datetime ranges for gap detection
+        session_dt_ranges = [
+            (pd.to_datetime(s, unit="ms"), pd.to_datetime(e, unit="ms"))
+            for s, e in SESSION_RANGES
+        ]
+
+        def _session_end_for(dt):
+            """Return the end of the session containing dt, or dt itself if not in any session."""
+            for s_dt, e_dt in session_dt_ranges:
+                if s_dt <= dt <= e_dt:
+                    return e_dt
+            return dt
+
         for idx, did in enumerate(active_displays):
             df_d = df_focus[df_focus["display_id"] == did].reset_index(drop=True)
             if df_d.empty:
                 continue
-            # For displays with only 1 event, extend to x_max
             for i in range(len(df_d)):
                 pkg = _short_name(str(df_d.iloc[i]["current_pkg"]))
                 start = df_d.iloc[i]["datetime"]
-                end = df_d.iloc[i + 1]["datetime"] if i + 1 < len(df_d) else x_max
+                session_end = _session_end_for(start)
+                # End is the next event OR session boundary, whichever comes first
+                if i + 1 < len(df_d):
+                    next_dt = df_d.iloc[i + 1]["datetime"]
+                    end = min(next_dt, session_end)
+                else:
+                    end = session_end
                 dur_s = (end - start).total_seconds()
                 if 0 < dur_s < 86400:
                     color = app_color_map.get(pkg, "#888")
@@ -776,6 +851,9 @@ def _build_timeline_tab(events, dfs, displays):
     if not children or len(children) <= 1:
         children.append(html.P("Insufficient data for timeline.", style={"color": "#888"}))
 
+    # Add a hidden store for x-axis sync
+    children.append(dcc.Store(id="tl-xrange-store"))
+
     return html.Div(children)
 
 
@@ -795,7 +873,7 @@ def _build_overview_tab(events, dfs):
                   title="Event Count by Collector", text="Count")
     fig1.update_traces(marker_color="#0f9b8e")
 
-    # Combined: Event Rate + Data Volume (toggleable via buttons)
+    # Combined: Event Rate + Data Volume (toggleable stacked bar chart)
     all_rows = []
     size_rows = []
     for e in events:
@@ -816,8 +894,8 @@ def _build_overview_tab(events, dfs):
         density = df_all.groupby(["time_bin", "collector"]).size().reset_index(name="count")
         for coll in density["collector"].unique():
             d = density[density["collector"] == coll]
-            fig_combined.add_trace(go.Scatter(
-                x=d["time_bin"], y=d["count"], mode="lines+markers",
+            fig_combined.add_trace(go.Bar(
+                x=d["time_bin"], y=d["count"],
                 name=coll, visible=True,
             ))
             rate_traces.append(True)
@@ -830,8 +908,8 @@ def _build_overview_tab(events, dfs):
         kb_per_min["KB"] = kb_per_min["bytes"] / 1024
         for coll in kb_per_min["collector"].unique():
             d = kb_per_min[kb_per_min["collector"] == coll]
-            fig_combined.add_trace(go.Scatter(
-                x=d["time_bin"], y=d["KB"], mode="lines+markers",
+            fig_combined.add_trace(go.Bar(
+                x=d["time_bin"], y=d["KB"],
                 name=coll, visible=False,
             ))
             rate_traces.append(False)
@@ -840,11 +918,12 @@ def _build_overview_tab(events, dfs):
     n_total = len(rate_traces)
     fig_combined.update_layout(
         title=dict(text="Event Rate (per minute)", y=0.95),
+        barmode="stack",
         updatemenus=[dict(
             type="buttons", direction="right",
             x=0.5, y=1.12, xanchor="center",
             buttons=[
-                dict(label="Event Rate",
+                dict(label="Event Count",
                      method="update",
                      args=[{"visible": [rate_traces[i] or False for i in range(n_total)]},
                            {"title.text": "Event Rate (per minute)", "yaxis.title.text": "Events"}]),
@@ -1262,8 +1341,9 @@ def _build_touch_tab(dfs, displays):
                 title=f"Touch Heatmap — {name} (n={n})",
                 xaxis=dict(range=[0, res[0]], showgrid=False, constrain="domain"),
                 yaxis=dict(range=[res[1], 0], showgrid=False, scaleanchor="x", constrain="domain"),
+                margin=dict(l=60, r=60, t=50, b=30),
             )
-            fig_h = min(350, int(400 * res[1] / res[0]) + 60)
+            fig_h = max(400, int(res[1] / res[0] * 1400) + 80)
             children.append(_full(_graph(fig, fig_h)))
 
     return html.Div(children)
