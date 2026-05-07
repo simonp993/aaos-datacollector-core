@@ -6,11 +6,13 @@ import com.porsche.aaos.platform.telemetry.collector.network.NetworkStatsCollect
 import com.porsche.aaos.platform.telemetry.collector.system.AppLifecycleCollector
 import com.porsche.aaos.platform.telemetry.collector.system.AudioCollector
 import com.porsche.aaos.platform.telemetry.collector.system.ConnectivityCollector
+import com.porsche.aaos.platform.telemetry.collector.system.CpuCollector
 import com.porsche.aaos.platform.telemetry.collector.system.FrameRateCollector
 import com.porsche.aaos.platform.telemetry.collector.system.LocationCollector
 import com.porsche.aaos.platform.telemetry.collector.system.MemoryCollector
 import com.porsche.aaos.platform.telemetry.collector.system.PackageCollector
 import com.porsche.aaos.platform.telemetry.collector.system.ProcessCollector
+import com.porsche.aaos.platform.telemetry.collector.system.SelfMonitorCollector
 import com.porsche.aaos.platform.telemetry.collector.system.SensorBatteryCollector
 import com.porsche.aaos.platform.telemetry.collector.system.StorageCollector
 import com.porsche.aaos.platform.telemetry.collector.system.TelephonyCollector
@@ -105,4 +107,12 @@ abstract class CollectorModule {
     @Binds
     @IntoSet
     abstract fun bindPowerStateCollector(impl: PowerStateCollector): Collector
+
+    @Binds
+    @IntoSet
+    abstract fun bindCpuCollector(impl: CpuCollector): Collector
+
+    @Binds
+    @IntoSet
+    abstract fun bindSelfMonitorCollector(impl: SelfMonitorCollector): Collector
 }
