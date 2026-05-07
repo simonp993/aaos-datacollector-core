@@ -7,6 +7,9 @@ import vendor.porsche.hardware.vehiclevendorextension.VehicleProperty
 object VhalPropertyIds {
     // Porsche vendor extensions
     val PORSCHE_DIAG_MMTR_AVAILABLE: Int = VehicleProperty.PORSCHE_DIAG_MMTR_AVAILABLE
+    val PORSCHE_AP_OPERATING_MODE: Int = VehicleProperty.PORSCHE_AP_OPERATING_MODE
+    val PORSCHE_CLAMPS_STATE: Int = VehicleProperty.PORSCHE_CLAMPS_STATE
+    val PORSCHE_SHUTDOWN_FLAG: Int = VehicleProperty.PORSCHE_SHUTDOWN_FLAG
 
     // Standard AAOS property IDs (forwarded from android.car.VehiclePropertyIds)
     val PERF_VEHICLE_SPEED: Int = VehiclePropertyIds.PERF_VEHICLE_SPEED

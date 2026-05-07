@@ -8,9 +8,16 @@ import com.porsche.aaos.platform.telemetry.vehicleplatform.VhalPropertyIds
 import com.porsche.aaos.platform.telemetry.vehicleplatform.VhalPropertyService
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Available VHAL properties on Scylla (MIB4) emulator — 217 total
@@ -61,12 +68,26 @@ class VehiclePropertyCollector @Inject constructor(
     private val signalId = TelemetryEvent.signalId("${name}Collector")
 
     private val previousValues = ConcurrentHashMap<Int, Any>()
+    private val changeBatch = mutableListOf<List<Any?>>()
+    private val batchMutex = Mutex()
+    private var flushJob: Job? = null
 
     @Volatile
     private var running = false
 
     override suspend fun start() {
         running = true
+        logger.i(TAG, "Starting VHAL observation (batched every ${FLUSH_INTERVAL_MS / 1000}s)")
+
+        // Start periodic flush job
+        flushJob = CoroutineScope(Dispatchers.Default).launch {
+            delay(STAGGER_DELAY_MS)
+            while (isActive) {
+                delay(FLUSH_INTERVAL_MS)
+                flushBatch()
+            }
+        }
+
         coroutineScope {
             OBSERVED_PROPERTIES.forEach { (propertyId, propertyName) ->
                 launch {
@@ -78,21 +99,15 @@ class VehiclePropertyCollector @Inject constructor(
                             if (!running) return@collect
                             val previous = previousValues.put(propertyId, value)
                             if (value == previous) return@collect
-                            telemetry.send(
-                                TelemetryEvent(
-                                    signalId = signalId,
-                                    payload = mapOf(
-                                        "actionName" to "Vehicle_${propertyName}Changed",
-                                        "trigger" to "system",
-                                        "metadata" to mapOf(
-                                            "propertyId" to propertyId,
-                                            "property" to propertyName,
-                                            "previous" to previous,
-                                            "current" to value,
-                                        ),
-                                    ),
-                                ),
+
+                            // Append to batch: [timestamp, property, previous, current]
+                            val entry = listOf(
+                                System.currentTimeMillis(),
+                                propertyName,
+                                previous,
+                                value,
                             )
+                            batchMutex.withLock { changeBatch.add(entry) }
                         }
                 }
             }
@@ -101,12 +116,39 @@ class VehiclePropertyCollector @Inject constructor(
 
     override fun stop() {
         running = false
+        flushJob?.cancel()
+        flushJob = null
         previousValues.clear()
         logger.i(TAG, "Stopped")
     }
 
+    private suspend fun flushBatch() {
+        val snapshot = batchMutex.withLock {
+            if (changeBatch.isEmpty()) return
+            changeBatch.toList().also { changeBatch.clear() }
+        }
+
+        telemetry.send(
+            TelemetryEvent(
+                signalId = signalId,
+                payload = mapOf(
+                    "actionName" to "VHAL_ValuesChanged",
+                    "trigger" to "heartbeat",
+                    "metadata" to mapOf(
+                        "count" to snapshot.size,
+                        "sampleSchema" to listOf("timestampMillis", "property", "previous", "current"),
+                        "changes" to snapshot,
+                    ),
+                ),
+            ),
+        )
+        logger.d(TAG, "Flushed ${snapshot.size} VHAL changes")
+    }
+
     companion object {
         private const val TAG = "VehiclePropertyCollector"
+        private const val FLUSH_INTERVAL_MS = 60_000L
+        private const val STAGGER_DELAY_MS = 6_000L
 
         private val OBSERVED_PROPERTIES = listOf(
             // Driving / Powertrain
@@ -156,6 +198,10 @@ class VehiclePropertyCollector @Inject constructor(
             VhalPropertyIds.HVAC_SIDE_MIRROR_HEAT to "HVAC_SIDE_MIRROR_HEAT",
             VhalPropertyIds.HVAC_TEMPERATURE_DISPLAY_UNITS to "HVAC_TEMPERATURE_DISPLAY_UNITS",
             VhalPropertyIds.HVAC_TEMPERATURE_VALUE_SUGGESTION to "HVAC_TEMPERATURE_VALUE_SUGGESTION",
+            // Power / Porsche vendor (available on real hardware, gracefully skipped on emulator)
+            VhalPropertyIds.PORSCHE_AP_OPERATING_MODE to "PORSCHE_AP_OPERATING_MODE",
+            VhalPropertyIds.PORSCHE_CLAMPS_STATE to "PORSCHE_CLAMPS_STATE",
+            VhalPropertyIds.PORSCHE_SHUTDOWN_FLAG to "PORSCHE_SHUTDOWN_FLAG",
         )
     }
 }

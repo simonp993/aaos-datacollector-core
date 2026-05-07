@@ -14,17 +14,18 @@ import com.porsche.aaos.platform.telemetry.vehicleplatform.VhalPropertyIds
 import com.porsche.aaos.platform.telemetry.vehicleplatform.VhalPropertyService
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.launch
 
 /**
  * Collects power lifecycle events for the vehicle infotainment system.
  *
  * Events emitted:
  * - Power_Boot: Once at startup with boot reason, ignition state, uptime, power policy
- * - Power_IgnitionChanged: On each IGNITION_STATE transition (OFF→ACC→ON→START)
  * - Power_StateChanged: On CarPowerManager state transitions (shutdown-prepare, suspend, etc.)
+ *
+ * IGNITION_STATE changes are handled by VehiclePropertyCollector (avoids duplication).
+ * Porsche vendor power properties (PORSCHE_AP_OPERATING_MODE, PORSCHE_CLAMPS_STATE,
+ * PORSCHE_SHUTDOWN_FLAG) are also observed by VehiclePropertyCollector when available on
+ * real hardware.
  *
  * Lifecycle stages:
  * 1. Pre-ignition wake: MCU boots Android (AP_POWER_BOOTUP_REASON = DOOR_UNLOCK/APPROACH)
@@ -46,12 +47,7 @@ class PowerStateCollector @Inject constructor(
     private var car: Car? = null
     private var powerManager: CarPowerManager? = null
 
-    @Volatile
-    private var running = false
-    private var previousIgnitionState: Int? = null
-
     override suspend fun start() {
-        running = true
         logger.i(TAG, "Starting power state monitoring")
 
         // Emit boot event with initial state
@@ -59,15 +55,9 @@ class PowerStateCollector @Inject constructor(
 
         // Connect to CarPowerManager for shutdown/suspend signals
         connectCarPowerManager()
-
-        // Observe IGNITION_STATE changes via VHAL
-        coroutineScope {
-            launch { observeIgnitionState() }
-        }
     }
 
     override fun stop() {
-        running = false
         car?.disconnect()
         car = null
         powerManager = null
@@ -79,8 +69,6 @@ class PowerStateCollector @Inject constructor(
         val ignitionState = readIgnitionState()
         val uptimeMs = SystemClock.elapsedRealtime()
         val currentPowerPolicy = readCurrentPowerPolicy()
-
-        previousIgnitionState = ignitionState
 
         telemetry.send(
             TelemetryEvent(
@@ -104,34 +92,6 @@ class PowerStateCollector @Inject constructor(
             "Boot event: reason=${bootupReasonName(bootupReason)}, " +
                 "ignition=${ignitionStateName(ignitionState)}, uptime=${uptimeMs}ms",
         )
-    }
-
-    private suspend fun observeIgnitionState() {
-        vhalPropertyService.observeProperty<Int>(VhalPropertyIds.IGNITION_STATE)
-            .catch { e -> logger.w(TAG, "Failed to observe IGNITION_STATE", e) }
-            .collect { state ->
-                if (!running) return@collect
-                val previous = previousIgnitionState
-                if (state == previous) return@collect
-                previousIgnitionState = state
-
-                telemetry.send(
-                    TelemetryEvent(
-                        signalId = signalId,
-                        payload = mapOf(
-                            "actionName" to "Power_IgnitionChanged",
-                            "trigger" to "system",
-                            "metadata" to mapOf(
-                                "previous" to ignitionStateName(previous),
-                                "previousCode" to previous,
-                                "current" to ignitionStateName(state),
-                                "currentCode" to state,
-                            ),
-                        ),
-                    ),
-                )
-                logger.i(TAG, "Ignition: ${ignitionStateName(previous)} → ${ignitionStateName(state)}")
-            }
     }
 
     @Suppress("TooGenericExceptionCaught")
