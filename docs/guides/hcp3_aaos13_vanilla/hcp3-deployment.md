@@ -194,51 +194,18 @@ adb reboot
 
 ## Installing on the Emulator
 
-The emulator must be started with `-writable-system` to allow pushing files to `/system/`. See [hcp3-avd-setup.md](hcp3-avd-setup.md) for the launch command.
-
-### Step 1 — Remount the system partition
+With the emulator running and `adb` connected:
 
 ```bash
-adb -s emulator-5556 root
-adb -s emulator-5556 remount
+adb -s emulator-5556 install -r app/build/outputs/apk/hcp3Mock/debug/app-hcp3-mock-debug.apk
 ```
 
-Expected output: `remount succeeded`. If you see `remount failed`, the emulator was not started with `-writable-system`.
+The APK is signed with `aosp-platform.jks` which matches the vanilla AAOS 13 emulator's platform key. All signature-level permissions are auto-granted at install time. No `adb remount` or `-writable-system` is needed.
 
-### Step 2 — Push the APK to priv-app
-
-```bash
-APK=app/build/outputs/apk/hcp3Mock/debug/app-hcp3-mock-debug.apk
-adb -s emulator-5556 shell mkdir -p /system/priv-app/DataCollector
-adb -s emulator-5556 push "$APK" /system/priv-app/DataCollector/DataCollector.apk
-```
-
-### Step 3 — Push the privapp-permissions allowlist
-
-Every privileged permission declared in `AndroidManifest.xml` must be listed in an allowlist XML or `system_server` will crash on boot. A pre-built XML is committed at `docs/guides/hcp3_aaos13_vanilla/privapp-permissions-datacollector.xml`:
+Alternatively, build and install in one step:
 
 ```bash
-adb -s emulator-5556 push \
-  docs/guides/hcp3_aaos13_vanilla/privapp-permissions-datacollector.xml \
-  /system/etc/permissions/privapp-permissions-datacollector.xml
-```
-
-> If you add new privileged permissions to `AndroidManifest.xml`, update that XML file and re-push it.
-
-### Step 4 — Uninstall any data/app version and reboot
-
-If the app was previously installed via `adb install`, remove it first to avoid a conflict:
-
-```bash
-adb -s emulator-5556 shell pm uninstall com.porsche.aaos.platform.telemetry 2>/dev/null || true
-adb -s emulator-5556 reboot
-```
-
-Wait for the emulator to finish booting (the first boot after a system partition change takes ~2–3 minutes as PackageManager rescans all apps):
-
-```bash
-adb -s emulator-5556 wait-for-device shell \
-  'while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 2; done; echo "Boot complete"'
+./gradlew :app:installHcp3MockDebug
 ```
 
 ### Starting the Service
@@ -269,18 +236,46 @@ adb -s emulator-5556 logcat -s DataCollector:*
 
 ### Updating the APK
 
-For subsequent deploys after the first install, a full reboot is not needed — just push the new APK and restart the service:
+For subsequent deploys, just reinstall and restart:
 
 ```bash
 ./gradlew :app:assembleHcp3MockDebug
-adb -s emulator-5556 root && adb -s emulator-5556 remount
-adb -s emulator-5556 push \
-  app/build/outputs/apk/hcp3Mock/debug/app-hcp3-mock-debug.apk \
-  /system/priv-app/DataCollector/DataCollector.apk
+adb -s emulator-5556 install -r app/build/outputs/apk/hcp3Mock/debug/app-hcp3-mock-debug.apk
 adb -s emulator-5556 shell am force-stop com.porsche.aaos.platform.telemetry
 adb -s emulator-5556 shell am start-foreground-service \
   -n com.porsche.aaos.platform.telemetry/.DataCollectorService
 ```
+
+### Emulator priv-app Fallback (Rarely Needed)
+
+If you need priv-app placement on the emulator (e.g., for `sharedUserId` or testing `privileged`-only permissions), you must start the emulator with `-writable-system` (see [hcp3-avd-setup.md](hcp3-avd-setup.md)):
+
+```bash
+adb -s emulator-5556 root
+adb -s emulator-5556 remount
+```
+
+Expected output: `remount succeeded`. If you see `remount failed`, the emulator was not started with `-writable-system`.
+
+```bash
+APK=app/build/outputs/apk/hcp3Mock/debug/app-hcp3-mock-debug.apk
+adb -s emulator-5556 shell mkdir -p /system/priv-app/DataCollector
+adb -s emulator-5556 push "$APK" /system/priv-app/DataCollector/DataCollector.apk
+adb -s emulator-5556 push \
+  docs/guides/hcp3_aaos13_vanilla/privapp-permissions-datacollector.xml \
+  /system/etc/permissions/privapp-permissions-datacollector.xml
+adb -s emulator-5556 shell pm uninstall com.porsche.aaos.platform.telemetry 2>/dev/null || true
+adb -s emulator-5556 reboot
+```
+
+Wait for boot:
+
+```bash
+adb -s emulator-5556 wait-for-device shell \
+  'while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 2; done; echo "Boot complete"'
+```
+
+> **Note:** This fallback is NOT required for normal development. Use `adb install -r` with the platform-signed APK.
 
 ### Known Collector Limitations on Vanilla AAOS 13 Emulator
 
@@ -394,7 +389,7 @@ sdk.dir=/mnt/c/Users/<YourUser>/AppData/Local/Android/Sdk
 
 ```bash
 export JAVA_HOME="/mnt/c/Program Files/Android/Android Studio/jbr"
-./gradlew :app:assembleMib4MockDebug
+./gradlew :app:assembleHcp3MockDebug
 ```
 
 ### Install and start the app

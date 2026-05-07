@@ -46,36 +46,122 @@ class DataCollectorService : Service() {
      * All telemetry payloads only (LogTelemetry output):
      *   adb logcat | grep "DataCollector:LogTelemetry"
      *
-     * Per-collector telemetry events only:
-     *   TODO: - make the events smaller with same information, make sure, that all events can be corelated, 
-     *           make sure previous value and current exist, make sure all payloads or somewhat homogeneous, 
-     *           check general implications of datacollector on the system power, maybe add dev and prod flavour for some signals,
-     *           combine heartbeat and system?, Get turned on off state of displays? Make sure timestamps inside metadata have same format (epochSec)
-     *           add comments explaining payloads to all collectors. Get the app startup times, make sure to have the FrameRate schema for efficiency if possible,
-     *           document all action names somehow automatic, ensure that not all 60s cyclic things are send at the same time, maybe add some randomization to it, so they are more distributed over time.
-     *          make sure all payloads query for all users (not only 0, but also 10) for example in the mapbox context (maybe look at coreservices solution and talk to benni).
-     *   adb logcat | grep "DataCollector:LogTelemetry.*AudioCollector"         - Checked on emulator, mute button not working, TODO needs real device testing
-     *   adb logcat | grep "DataCollector:LogTelemetry.*AppLifecycleCollector"  - Checked on emulator, TODO needs real device testing, app time until start up, is not possible at the moment, maybe for later with mathieu
-     *   adb logcat | grep "DataCollector:LogTelemetry.*NetworkStatsCollector"  - Checked on emulator, TODO needs real device testing
-     *   adb logcat | grep "DataCollector:LogTelemetry.*TouchInputCollector"    - Checked on emulator, TODO needs real device testing
-     *   adb logcat | grep "DataCollector:LogTelemetry.*VehiclePropertyCollector" - TODO maybe change action name to VHAL parameters changed and batch changes since too many values are send, previous seems to be always null, i think they are on poll not on change, maybe it's possible to only send when a value changes. then send previous and current. Batch it if possible. So collect changes with timestamps for 60seconds and send all at once (same variable can appear multiple times). 
-     *   adb logcat | grep "DataCollector:LogTelemetry.*MemoryCollector"        - TODO needs emulator + real device testing
-     *               TODO adb shell am send-trim-memory com.porsche.aaos.platform.telemetry RUNNING_MODERATE or RUNNING_LOW or RUNNING_CRITICAL (for testing, add later)
-     *   adb logcat | grep "DataCollector:LogTelemetry.*MediaPlaybackCollector" - TODO needs emulator + real device testing -> Fix, weird payloads    
-     *   adb logcat | grep "DataCollector:LogTelemetry.*TimeChangeCollector"    - TODO needs emulator + real device testing -> Works, but a user manual change in the settings, had the trigger "system" on it, also no previous value
-     *   adb logcat | grep "DataCollector:LogTelemetry.*CarInfoCollector"       - TODO needs emulator + real device testing -> empty metadata, no trigger
-     *   adb logcat | grep "DataCollector:LogTelemetry.*ConnectivityCollector"  - TODO needs emulator + real device testing -> nothing yet
-     *   adb logcat | grep "DataCollector:LogTelemetry.*DriveStateCollector"    - TODO needs emulator + real device testing -> nothing 
-     *   adb logcat | grep "DataCollector:LogTelemetry.*PackageCollector"       - TODO needs emulator + real device testing -> nothing yet
-     *   adb logcat | grep "DataCollector:LogTelemetry.*ProcessCollector"       - TODO needs emulator + real device testing -> nothing
-     *   adb logcat | grep "DataCollector:LogTelemetry.*SensorBatteryCollector" - TODO needs emulator + real device testing -> seems correct, to fast polling
-     *   adb logcat | grep "DataCollector:LogTelemetry.*TelephonyCollector"     - TODO needs emulator + real device testing -> seems incorrect, no trigger
-     *   adb logcat | grep "DataCollector:LogTelemetry.*FrameRateCollector"     - TODO needs emulator + real device testing -> test if change of display state is logged, also check payload
+     * Per-collector:
+     *   adb logcat | grep "DataCollector:LogTelemetry.*AudioCollector"
+     *   adb logcat | grep "DataCollector:LogTelemetry.*AppLifecycleCollector"
+     *   adb logcat | grep "DataCollector:LogTelemetry.*NetworkStatsCollector"
+     *   adb logcat | grep "DataCollector:LogTelemetry.*TouchInputCollector"
+     *   adb logcat | grep "DataCollector:LogTelemetry.*VehiclePropertyCollector"
+     *   adb logcat | grep "DataCollector:LogTelemetry.*MemoryCollector"
+     *   adb logcat | grep "DataCollector:LogTelemetry.*MediaPlaybackCollector"
+     *   adb logcat | grep "DataCollector:LogTelemetry.*TimeChangeCollector"
+     *   adb logcat | grep "DataCollector:LogTelemetry.*CarInfoCollector"
+     *   adb logcat | grep "DataCollector:LogTelemetry.*ConnectivityCollector"
+     *   adb logcat | grep "DataCollector:LogTelemetry.*DriveStateCollector"
+     *   adb logcat | grep "DataCollector:LogTelemetry.*PackageCollector"
+     *   adb logcat | grep "DataCollector:LogTelemetry.*ProcessCollector"
+     *   adb logcat | grep "DataCollector:LogTelemetry.*SensorBatteryCollector"
+     *   adb logcat | grep "DataCollector:LogTelemetry.*TelephonyCollector"
+     *   adb logcat | grep "DataCollector:LogTelemetry.*FrameRateCollector"
      *
      * Multiple collectors:
      *   adb logcat | grep -E "DataCollector:LogTelemetry.*(AppLifecycle|MediaPlayback)"
      *
      * Add -s emulator-5554 or -s 172.16.250.248:5555 to target a specific device.
+     *
+     * ── General TODOs (ordered by dependency — do top-first) ───────────────────
+     *
+     * TODO G1: Homogeneous payload structure — define a consistent schema for all collectors:
+     *          ensure every event has `previous` + `current` values, same key naming, same nesting.
+     *          (All per-collector fixes below depend on this being settled first.)
+     *
+     * TODO G2: Consistent timestamps — all timestamps in metadata must use epochSec (Long).
+     *          Audit every collector's metadata map for mixed formats.
+     *
+     * TODO G3: Event correlation — add a shared session/correlation ID so events from the
+     *          same drive session or time window can be linked across collectors.
+     *
+     * TODO G4: Multi-user coverage — ensure all collectors query data for user 0 AND user 10.
+     *          Example: mapbox/navigation context. (Talk to Benni, check coreservices solution.)
+     *          NetworkStatsCollector already done; apply pattern to others.
+     *
+     * TODO G5: Stagger cyclic collectors — add random offset (0–60s) to each 60s poll so they
+     *          don't all fire at the same instant. Reduces burst load on telemetry sink.
+     *
+     * TODO G6: Power impact analysis — profile CPU/battery impact of DataCollector on the
+     *          system. Identify hot collectors and tune intervals.
+     *
+     * TODO G7: Make events smaller — once structure is stable, minimize payload size while
+     *          keeping the same information (shorter keys, omit null fields, etc.).
+     *
+     * TODO G8: Dev vs prod flavour — some verbose signals (e.g. per-frame, per-touch) should
+     *          only emit in dev builds or at reduced frequency in prod.
+     *
+     * TODO G9: Add payload documentation comments to every collector class explaining what
+     *          each field means, units, and when the event fires.
+     *
+     * TODO G10: Auto-document action names — generate a registry/table of all action name
+     *           strings emitted by collectors (annotation processor or build-time script).
+     *
+     * TODO G11: Combine HeartbeatCollector + SystemCollector? Evaluate if they can merge.
+     *
+     * TODO G12: Display on/off state — detect and emit when displays are turned on/off.
+     *
+     * TODO G13: App startup times — capture time-to-first-frame per app.
+     *           (Blocked — discuss with Mathieu, not possible currently.)
+     *
+     * TODO G14: FrameRate schema — use an efficient schema (deltas/run-length) if frame rate
+     *           data volume becomes a concern.
+     *
+     * ── Per-Collector TODOs (ordered: broken > wrong data > needs tuning > verify only) ──
+     *
+     * --- BROKEN (emitting nothing) ---
+     *
+     * TODO C1: ConnectivityCollector — emits nothing. Fix event emission logic.
+     * TODO C2: DriveStateCollector — emits nothing. Fix event emission logic.
+     * TODO C3: PackageCollector — emits nothing. Fix event emission logic.
+     * TODO C4: ProcessCollector — emits nothing. Fix event emission logic.
+     * TODO C5: CarInfoCollector — empty metadata, no trigger. Fix.
+     *
+     * --- WRONG DATA ---
+     *
+     * TODO C6: VehiclePropertyCollector — `previous` is always null (likely polling, not
+     *          on-change). Switch to on-change subscription; emit previous+current. Batch:
+     *          collect changes with timestamps for 60s, send all at once (same property can
+     *          appear multiple times). Rename action → "VHAL parameters changed".
+     *
+     * TODO C7: MediaPlaybackCollector — weird/malformed payloads. Investigate and fix.
+     *
+     * TODO C8: TimeChangeCollector — manual user time change shows trigger="system" (wrong).
+     *          Also missing `previous` value.
+     *
+     * TODO C9: TelephonyCollector — seems incorrect, no trigger field. Fix trigger logic.
+     *
+     * --- NEEDS TUNING ---
+     *
+     * TODO C10: SensorBatteryCollector — data looks correct but polling too fast. Reduce
+     *           interval or switch to on-change.
+     *
+     * TODO C11: FrameRateCollector — verify display state changes are logged. Check payload
+     *           structure matches expected schema.
+     *
+     * --- WORKING ON EMULATOR, VERIFY ON REAL DEVICE ---
+     *
+     * TODO C12: AudioCollector — works on emulator (mute button not functional on emu).
+     *           Needs real device testing.
+     *
+     * TODO C13: AppLifecycleCollector — works on emulator. Needs real device testing.
+     *           (App startup time: not possible currently, revisit with Mathieu later.)
+     *
+     * TODO C14: NetworkStatsCollector — works on emulator (multi-user verified).
+     *           Needs real device testing.
+     *
+     * TODO C15: TouchInputCollector — works on emulator. Needs real device testing.
+     *
+     * TODO C16: MemoryCollector — needs emulator + real device testing.
+     *           Test cmd: adb shell am send-trim-memory com.porsche.aaos.platform.telemetry
+     *           RUNNING_MODERATE | RUNNING_LOW | RUNNING_CRITICAL
+     *
      * ──────────────────────────────────────────────────────────────────────────
      */
     private val collectorEnabled = mapOf(

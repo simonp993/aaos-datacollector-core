@@ -181,6 +181,8 @@ adb start-server
 
 ### Standard launch (headless, read-only system)
 
+This is the recommended launch mode. Platform-signed APKs are installed via `adb install -r` without needing a writable system partition:
+
 ```bash
 ~/Library/Android/sdk/emulator/emulator \
   -avd HCP3_AVD \
@@ -189,9 +191,9 @@ adb start-server
   -gpu host &
 ```
 
-### Launch with writable system partition
+### Launch with writable system partition (fallback)
 
-Required when deploying Data Collector as a **system priv-app** (the only supported deployment mode). The `-writable-system` flag enables `adb remount`, which makes `/system` writable so the APK and permissions XML can be pushed:
+Only needed if you must push files to `/system/priv-app/` (e.g., for `sharedUserId` or testing `privileged`-only permissions). Normal development does NOT require this — use the standard launch above with `adb install -r`:
 
 ```bash
 ~/Library/Android/sdk/emulator/emulator \
