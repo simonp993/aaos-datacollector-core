@@ -83,6 +83,7 @@ class DataCollectorService : Service() {
      *          emitted at least once at startup, so we have that data point even if it doesn't change.
      *          Change signals like audio_snapshot, to only send once, because one snapshot is enough 
      *          because if nothing else is send after, we know that there was no change.
+     *          This requires a cnetralized approach since multiple signals will be like that, but they need to listen to the same startup event. And also a logic to not send too much events at startup
      *
      * TODO G3: Event correlation — add a shared session/correlation ID so events from the
      *          same drive session or time window can be linked across collectors.
