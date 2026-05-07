@@ -18,6 +18,7 @@ import com.porsche.aaos.platform.telemetry.collector.system.TimeChangeCollector
 import com.porsche.aaos.platform.telemetry.collector.system.TouchInputCollector
 import com.porsche.aaos.platform.telemetry.collector.vehicle.CarInfoCollector
 import com.porsche.aaos.platform.telemetry.collector.vehicle.DriveStateCollector
+import com.porsche.aaos.platform.telemetry.collector.vehicle.PowerStateCollector
 import com.porsche.aaos.platform.telemetry.collector.vehicle.VehiclePropertyCollector
 import dagger.Binds
 import dagger.Module
@@ -100,4 +101,8 @@ abstract class CollectorModule {
     @Binds
     @IntoSet
     abstract fun bindLocationCollector(impl: LocationCollector): Collector
+
+    @Binds
+    @IntoSet
+    abstract fun bindPowerStateCollector(impl: PowerStateCollector): Collector
 }

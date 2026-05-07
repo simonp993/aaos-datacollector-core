@@ -42,6 +42,7 @@ class MemoryCollector @Inject constructor(
             val totalMem = memInfo.totalMem
 
             val samples = mutableListOf<List<Any>>()
+            delay(STAGGER_DELAY_MS) // Stagger to spread flush bursts
             while (isActive) {
                 activityManager.getMemoryInfo(memInfo)
 
@@ -130,6 +131,7 @@ class MemoryCollector @Inject constructor(
         private const val TAG = "MemoryCollector"
         private const val SAMPLE_INTERVAL_MS = 5_000L
         private const val SAMPLES_PER_BATCH = 12
+        private const val STAGGER_DELAY_MS = 5_000L
 
         private fun trimLabel(level: Int): String = when (level) {
             ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE -> "RUNNING_MODERATE"

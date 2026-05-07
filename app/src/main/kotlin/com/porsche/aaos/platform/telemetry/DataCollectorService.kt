@@ -123,10 +123,6 @@ class DataCollectorService : Service() {
      *
      * --- WRONG DATA ---
      *
-     * TODO C6: VehiclePropertyCollector — `previous` is always null (likely polling, not
-     *          on-change). Switch to on-change subscription; emit previous+current. Batch:
-     *          collect changes with timestamps for 60s, send all at once (same property can
-     *          appear multiple times). Rename action → "VHAL parameters changed".
      *
      * TODO C7: MediaPlaybackCollector — weird/malformed payloads. Investigate and fix.
      *
@@ -174,13 +170,17 @@ class DataCollectorService : Service() {
         "Memory" to true,
         "NetworkStats" to true,
         "Package" to true,
-        "Process" to true,
+        // ProcessCollector disabled: process churn is too noisy for production fleet telemetry.
+        // What matters is installed packages (PackageCollector) and crash/ANR reports.
+        // For debugging, re-enable temporarily or replace with procstats/crash summary collector.
+        "Process" to false,
         "SensorBattery" to true,
         "Telephony" to true,
         "VehicleProperty" to true,
         "FrameRate" to true,
         "Storage" to true,
         "Location" to true,
+        "PowerState" to true,
     )
 
     override fun onCreate() {

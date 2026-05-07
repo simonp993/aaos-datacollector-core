@@ -54,6 +54,7 @@ class NetworkStatsCollector @Inject constructor(
 
         // Take initial snapshot so the first delta is meaningful (no cumulative dump)
         previousSnapshot = parseDumpsysNetstats()
+        delay(STAGGER_DELAY_MS) // Stagger to spread flush bursts
         delay(POLL_INTERVAL_MS)
 
         while (running && coroutineContext.isActive) {
@@ -335,6 +336,7 @@ class NetworkStatsCollector @Inject constructor(
     companion object {
         private const val TAG = "NetworkStatsCollector"
         private const val POLL_INTERVAL_MS = 60_000L
+        private const val STAGGER_DELAY_MS = 9_000L
         private const val PER_USER_RANGE = 100_000
         private val UID_PATTERN = Regex("""\buid=(\d+)\b""")
         private val STATS_PATTERN = Regex("""rb=(\d+).*tb=(\d+)""")

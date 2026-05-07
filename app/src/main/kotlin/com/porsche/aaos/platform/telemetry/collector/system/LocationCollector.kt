@@ -95,6 +95,9 @@ class LocationCollector @Inject constructor(
             )
         }
 
+        // Stagger initial delay to spread flush bursts across collectors
+        delay(STAGGER_DELAY_MS)
+
         // Flush loop
         while (running && coroutineContext.isActive) {
             delay(FLUSH_INTERVAL_MS)
@@ -144,5 +147,6 @@ class LocationCollector @Inject constructor(
         private const val TAG = "LocationCollector"
         private const val SAMPLE_INTERVAL_MS = 5_000L // 5s GPS updates
         private const val FLUSH_INTERVAL_MS = 60_000L // Batch flush every 60s
+        private const val STAGGER_DELAY_MS = 4_000L
     }
 }

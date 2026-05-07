@@ -127,6 +127,7 @@ class FrameRateCollector @Inject constructor(
         // Batch job: collect samples every 5s, emit every 60s
         batchJob = CoroutineScope(Dispatchers.Default).launch {
             val samples = mutableListOf<List<Any>>()
+            delay(STAGGER_DELAY_MS) // Stagger to spread flush bursts
 
             while (isActive) {
                 delay(SAMPLE_INTERVAL_MS)
@@ -193,6 +194,7 @@ class FrameRateCollector @Inject constructor(
         private const val TAG = "FrameRateCollector"
         private const val SAMPLE_INTERVAL_MS = 5_000L
         private const val SAMPLES_PER_BATCH = 12
+        private const val STAGGER_DELAY_MS = 8_000L
 
         private fun displayStateLabel(state: Int): String = when (state) {
             Display.STATE_OFF -> "OFF"

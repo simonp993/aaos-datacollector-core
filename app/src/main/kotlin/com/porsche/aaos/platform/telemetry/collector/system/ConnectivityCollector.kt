@@ -83,6 +83,9 @@ class ConnectivityCollector @Inject constructor(
         val request = NetworkRequest.Builder().build()
         cm.registerNetworkCallback(request, networkCallback)
 
+        // Stagger initial delay to spread flush bursts across collectors
+        delay(STAGGER_DELAY_MS)
+
         // Poll + flush loop
         var sampleCount = 0
         while (running && coroutineContext.isActive) {
@@ -182,5 +185,6 @@ class ConnectivityCollector @Inject constructor(
         private const val SAMPLE_INTERVAL_MS = 5_000L
         private const val FLUSH_INTERVAL_MS = 60_000L
         private const val SAMPLES_PER_BATCH = 12 // 12 × 5s = 60s
+        private const val STAGGER_DELAY_MS = 2_000L
     }
 }

@@ -52,6 +52,7 @@ class SensorBatteryCollector @Inject constructor(
         registerSensor(sm, Sensor.TYPE_LIGHT, "ambient_light")
 
         // Poll battery every 5s, flush all batches every 60s
+        delay(STAGGER_DELAY_MS) // Stagger to spread flush bursts
         var sampleCount = 0
         while (running && coroutineContext.isActive) {
             collectBatterySample()
@@ -211,5 +212,6 @@ class SensorBatteryCollector @Inject constructor(
         private const val TAG = "SensorBatteryCollector"
         private const val SAMPLE_INTERVAL_MS = 5_000L
         private const val SAMPLES_PER_BATCH = 12 // 12 × 5s = 60s flush
+        private const val STAGGER_DELAY_MS = 3_000L
     }
 }
