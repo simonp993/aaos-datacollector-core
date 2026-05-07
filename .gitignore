@@ -24,6 +24,10 @@ keystore.properties
 # Android profiling captures
 /captures/
 
+# Telemetry log data (pulled from device)
+telemetry-logs/
+telemetry_analysis/output/
+
 # AOSP platform key source files (only the JKS keystore is needed)
 *.pk8
 *.pem
