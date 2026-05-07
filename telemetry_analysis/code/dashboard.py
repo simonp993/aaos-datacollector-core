@@ -18,7 +18,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from dash import Dash, Input, Output, State, callback, ctx, dcc, html
+from dash import Dash, Input, Output, callback, dcc, html
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -198,6 +198,56 @@ ALL_TRIGGERS = sorted(set(
     if e.get("payload", {}).get("trigger")
 ))
 
+# Compute session time ranges for the session indicator bar
+_session_events = defaultdict(list)
+for _e in RAW_EVENTS:
+    _s = _e.get("_session")
+    _t = _e.get("timestamp")
+    if _s and _t:
+        _session_events[_s].append(_t)
+SESSION_RANGES = sorted(
+    [(min(ts_list), max(ts_list)) for ts_list in _session_events.values()],
+    key=lambda x: x[0],
+)
+
+
+def _build_range_selector_fig():
+    """Build a plotly figure with session bars and a built-in rangeslider for time selection."""
+    fig = go.Figure()
+    # Add session bars as visual indicators in the main area and rangeslider
+    for i, (s, e) in enumerate(SESSION_RANGES):
+        s_dt = pd.to_datetime(s, unit="ms")
+        e_dt = pd.to_datetime(e, unit="ms")
+        fig.add_trace(go.Bar(
+            x=[s_dt + (e_dt - s_dt) / 2],
+            y=[1],
+            width=[(e_dt - s_dt).total_seconds() * 1000],
+            marker_color="#0f9b8e",
+            opacity=0.6,
+            showlegend=False,
+            hoverinfo="text",
+            text=[f"Session {i + 1}: {s_dt.strftime('%H:%M:%S')} — {e_dt.strftime('%H:%M:%S')}"],
+        ))
+    min_dt = pd.to_datetime(MIN_TS, unit="ms")
+    max_dt = pd.to_datetime(MAX_TS, unit="ms")
+    fig.update_layout(
+        xaxis=dict(
+            range=[min_dt, max_dt],
+            type="date",
+            rangeslider=dict(visible=True, thickness=0.3),
+            showgrid=False,
+        ),
+        yaxis=dict(range=[0, 1], showticklabels=False, showgrid=False, zeroline=False,
+                   fixedrange=True),
+        height=120,
+        margin=dict(l=10, r=10, t=5, b=5),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(250,250,250,0.5)",
+        bargap=0,
+    )
+    return fig
+
+
 # ---------------------------------------------------------------------------
 # Dash App
 # ---------------------------------------------------------------------------
@@ -251,52 +301,30 @@ app.layout = html.Div(
             style={"marginBottom": "24px", "backgroundColor": "#ffffff", "padding": "16px 20px",
                    "borderRadius": "8px", "boxShadow": "0 1px 3px rgba(0,0,0,0.08)"},
             children=[
-                # Row 1: Start / End datetime pickers
+                # Row 1: Data range label
                 html.Div(
-                    style={"display": "flex", "gap": "16px", "alignItems": "flex-end",
-                           "marginBottom": "12px"},
+                    style={"display": "flex", "gap": "12px", "alignItems": "center",
+                           "marginBottom": "8px"},
                     children=[
-                        html.Div([
-                            html.Label("Start", style={"fontSize": "11px", "color": "#888",
-                                                        "display": "block", "marginBottom": "4px"}),
-                            dcc.Input(
-                                id="start-datetime",
-                                type="text",
-                                value=MIN_DT.strftime("%Y-%m-%d %H:%M:%S"),
-                                style={"fontSize": "13px", "padding": "6px 10px",
-                                       "border": "1px solid #ddd", "borderRadius": "4px",
-                                       "width": "180px"},
-                            ),
-                        ]),
-                        html.Div([
-                            html.Label("End", style={"fontSize": "11px", "color": "#888",
-                                                      "display": "block", "marginBottom": "4px"}),
-                            dcc.Input(
-                                id="end-datetime",
-                                type="text",
-                                value=MAX_DT.strftime("%Y-%m-%d %H:%M:%S"),
-                                style={"fontSize": "13px", "padding": "6px 10px",
-                                       "border": "1px solid #ddd", "borderRadius": "4px",
-                                       "width": "180px"},
-                            ),
-                        ]),
                         html.Span(
-                            f"Range: {MIN_DT.strftime('%Y-%m-%d %H:%M')} — {MAX_DT.strftime('%Y-%m-%d %H:%M')}",
-                            style={"color": "#aaa", "fontSize": "11px", "paddingBottom": "6px"},
+                            f"Data: {MIN_DT.strftime('%Y-%m-%d %H:%M')} — {MAX_DT.strftime('%H:%M')}",
+                            style={"fontSize": "13px", "color": "#555", "fontWeight": "500"},
+                        ),
+                        html.Span(
+                            id="time-range-label",
+                            style={"fontSize": "12px", "color": "#0f9b8e", "marginLeft": "auto"},
                         ),
                     ],
                 ),
-                # Row 2: Time slider (full width)
+                # Row 2: Plotly rangeslider with session indicators
                 html.Div([
-                    dcc.RangeSlider(
-                        id="time-slider",
-                        min=MIN_TS, max=MAX_TS, value=[MIN_TS, MAX_TS],
-                        marks={int(t): {"label": pd.to_datetime(t, unit="ms").strftime("%H:%M"),
-                                        "style": {"fontSize": "9px", "color": "#888"}}
-                               for t in [MIN_TS + i * (MAX_TS - MIN_TS) / 4 for i in range(5)]},
-                        tooltip={"always_visible": False},
+                    dcc.Graph(
+                        id="range-selector",
+                        figure=_build_range_selector_fig(),
+                        config={"displayModeBar": False},
+                        style={"height": "120px"},
                     ),
-                ], style={"marginBottom": "12px"}),
+                ], style={"marginBottom": "8px"}),
                 # Row 3: Dropdowns
                 html.Div(
                     style={"display": "flex", "gap": "16px", "alignItems": "flex-end", "flexWrap": "wrap"},
@@ -415,7 +443,7 @@ def _graph(fig, height=400):
 
 
 # Consistent margins for timeline charts so x-axes align
-_TIMELINE_MARGIN = dict(l=120, r=40, t=40, b=30)
+_TIMELINE_MARGIN = dict(l=120, r=60, t=90, b=30)
 
 
 def _timeline_graph(fig, height=400):
@@ -439,51 +467,44 @@ def _full(*children):
 
 
 @callback(
-    Output("time-slider", "value"),
-    Output("start-datetime", "value"),
-    Output("end-datetime", "value"),
-    Input("start-datetime", "n_submit"),
-    Input("end-datetime", "n_submit"),
-    Input("time-slider", "value"),
-    State("start-datetime", "value"),
-    State("end-datetime", "value"),
-    prevent_initial_call=True,
-)
-def sync_time_controls(_s_submit, _e_submit, slider_val, start_str, end_str):
-    """Keep datetime text inputs and slider in sync."""
-    trigger = ctx.triggered_id
-    if trigger in ("start-datetime", "end-datetime"):
-        # Text input submitted — parse and push to slider
-        try:
-            start_ts = int(pd.to_datetime(start_str).timestamp() * 1000)
-        except Exception:
-            start_ts = MIN_TS
-        try:
-            end_ts = int(pd.to_datetime(end_str).timestamp() * 1000)
-        except Exception:
-            end_ts = MAX_TS
-        start_ts = max(MIN_TS, min(start_ts, MAX_TS))
-        end_ts = max(MIN_TS, min(end_ts, MAX_TS))
-        s = pd.to_datetime(start_ts, unit="ms").strftime("%Y-%m-%d %H:%M:%S")
-        e = pd.to_datetime(end_ts, unit="ms").strftime("%Y-%m-%d %H:%M:%S")
-        return [start_ts, end_ts], s, e
-    # Slider moved — update text inputs
-    s = pd.to_datetime(slider_val[0], unit="ms").strftime("%Y-%m-%d %H:%M:%S")
-    e = pd.to_datetime(slider_val[1], unit="ms").strftime("%Y-%m-%d %H:%M:%S")
-    return slider_val, s, e
-
-
-@callback(
     Output("kpi-cards", "children"),
     Output("tab-content", "children"),
-    Input("time-slider", "value"),
+    Output("time-range-label", "children"),
+    Input("range-selector", "relayoutData"),
     Input("display-filter", "value"),
     Input("app-filter", "value"),
     Input("trigger-filter", "value"),
     Input("section-tabs", "value"),
 )
-def update_dashboard(time_range, displays, apps, triggers, active_tab):
-    events, dfs = _filter_events(time_range)
+def update_dashboard(relayout_data, displays, apps, triggers, active_tab):
+    # Determine time range from the rangeslider
+    start_ts, end_ts = MIN_TS, MAX_TS
+    if relayout_data:
+        # rangeslider emits xaxis.range[0] / xaxis.range[1] on drag,
+        # or xaxis.range as a list on some interactions,
+        # or autosize / xaxis.autorange on double-click reset.
+        x_start = relayout_data.get("xaxis.range[0]")
+        x_end = relayout_data.get("xaxis.range[1]")
+        if not x_start:
+            rng = relayout_data.get("xaxis.range")
+            if isinstance(rng, list) and len(rng) >= 2:
+                x_start, x_end = rng[0], rng[1]
+        if x_start and x_end:
+            try:
+                start_ts = int(pd.to_datetime(x_start).timestamp() * 1000)
+                end_ts = int(pd.to_datetime(x_end).timestamp() * 1000)
+            except Exception:
+                pass
+
+    start_ts = max(MIN_TS, min(start_ts, MAX_TS))
+    end_ts = max(MIN_TS, min(end_ts, MAX_TS))
+
+    # Build range label
+    s_dt = pd.to_datetime(start_ts, unit="ms")
+    e_dt = pd.to_datetime(end_ts, unit="ms")
+    range_label = f"Selected: {s_dt.strftime('%H:%M:%S')} — {e_dt.strftime('%H:%M:%S')}"
+
+    events, dfs = _filter_events([start_ts, end_ts])
     displays = displays or ALL_DISPLAYS
     apps = apps or []
     triggers = triggers or []
@@ -533,7 +554,7 @@ def update_dashboard(time_range, displays, apps, triggers, active_tab):
     else:
         content = html.P("Select a tab")
 
-    return cards, content
+    return cards, content, range_label
 
 
 # ---------------------------------------------------------------------------
@@ -548,6 +569,14 @@ def _build_timeline_tab(events, dfs, displays):
         "Synchronized timeline — zoom any row independently to inspect correlations.",
         style={"color": "#888", "fontSize": "12px", "marginBottom": "8px"},
     ))
+
+    # Compute shared x-axis range from all events
+    all_ts = [e.get("timestamp") for e in events if e.get("timestamp")]
+    if all_ts:
+        x_min = pd.to_datetime(min(all_ts), unit="ms")
+        x_max = pd.to_datetime(max(all_ts), unit="ms")
+    else:
+        x_min, x_max = MIN_DT, MAX_DT
 
     # --- 1) Foreground App (shape-based Gantt, same as App Usage) ---
     df_focus = dfs.get("App_FocusChanged", pd.DataFrame())
@@ -568,14 +597,15 @@ def _build_timeline_tab(events, dfs, displays):
         legend_added = set()
         for idx, did in enumerate(active_displays):
             df_d = df_focus[df_focus["display_id"] == did].reset_index(drop=True)
-            if len(df_d) < 2:
+            if df_d.empty:
                 continue
-            for i in range(len(df_d) - 1):
+            # For displays with only 1 event, extend to x_max
+            for i in range(len(df_d)):
                 pkg = _short_name(str(df_d.iloc[i]["current_pkg"]))
                 start = df_d.iloc[i]["datetime"]
-                end = df_d.iloc[i + 1]["datetime"]
+                end = df_d.iloc[i + 1]["datetime"] if i + 1 < len(df_d) else x_max
                 dur_s = (end - start).total_seconds()
-                if 0 < dur_s < 3600:
+                if 0 < dur_s < 86400:
                     color = app_color_map.get(pkg, "#888")
                     fig_app.add_shape(
                         type="rect", x0=start, x1=end,
@@ -604,7 +634,7 @@ def _build_timeline_tab(events, dfs, displays):
                 ticktext=display_labels,
                 range=[-0.5, len(display_labels) - 0.5],
             ),
-            xaxis=dict(type="date"),
+            xaxis=dict(type="date", range=[x_min, x_max]),
             height=80 * n_disp + 120,
             legend=dict(orientation="h", y=1.0, yanchor="bottom", x=0, font=dict(size=9)),
         )
@@ -636,33 +666,26 @@ def _build_timeline_tab(events, dfs, displays):
                 title="Touch Rate (per min)", yaxis_title="Touches/min",
                 barmode="overlay", height=250,
                 legend=dict(orientation="h", y=1.0, yanchor="bottom", x=0, font=dict(size=9)),
+                xaxis=dict(range=[x_min, x_max]),
             )
             children.append(_full(_timeline_graph(fig_touch, 250)))
 
-    # --- 3) FPS + Dropped Frames ---
+    # --- 3) Dropped Frames ---
     df_fps = dfs.get("Display_FrameRate", pd.DataFrame())
     if not df_fps.empty:
         fps_exp = expand_samples(df_fps)
-        if "fps" in fps_exp.columns and "datetime" in fps_exp.columns:
-            fig_fps = make_subplots(specs=[[{"secondary_y": True}]])
-            fig_fps.add_trace(go.Scatter(
-                x=fps_exp["datetime"], y=fps_exp["fps"], mode="lines",
-                name="FPS", line=dict(color="#0f9b8e", width=2),
-            ), secondary_y=False)
-            fig_fps.add_hline(y=60, line_dash="dash", line_color="green",
-                              annotation_text="60fps", secondary_y=False)
-            if "dropped" in fps_exp.columns:
-                fig_fps.add_trace(go.Bar(
-                    x=fps_exp["datetime"], y=fps_exp["dropped"],
-                    name="Dropped", marker_color="rgba(231,76,60,0.85)",
-                ), secondary_y=True)
-                fig_fps.update_yaxes(title_text="Dropped", secondary_y=True)
-            fig_fps.update_layout(
-                title="FPS & Dropped Frames", height=280,
+        if "dropped" in fps_exp.columns and "datetime" in fps_exp.columns:
+            fig_dropped = go.Figure()
+            fig_dropped.add_trace(go.Bar(
+                x=fps_exp["datetime"], y=fps_exp["dropped"],
+                name="Dropped Frames", marker_color="rgba(231,76,60,0.85)",
+            ))
+            fig_dropped.update_layout(
+                title="Dropped Frames", yaxis_title="Frames", height=250,
                 legend=dict(orientation="h", y=1.0, yanchor="bottom", x=0, font=dict(size=9)),
+                xaxis=dict(range=[x_min, x_max]),
             )
-            fig_fps.update_yaxes(title_text="FPS", secondary_y=False)
-            children.append(_full(_timeline_graph(fig_fps, 280)))
+            children.append(_full(_timeline_graph(fig_dropped, 250)))
 
     # --- 4) Available Memory ---
     df_mem = dfs.get("Memory_Usage", pd.DataFrame())
@@ -692,6 +715,7 @@ def _build_timeline_tab(events, dfs, displays):
             fig_mem.update_layout(
                 title="Available Memory (MB)", yaxis_title="MB", height=250,
                 legend=dict(orientation="h", y=1.0, yanchor="bottom", x=0, font=dict(size=9)),
+                xaxis=dict(range=[x_min, x_max]),
             )
             children.append(_full(_timeline_graph(fig_mem, 250)))
 
@@ -745,6 +769,7 @@ def _build_timeline_tab(events, dfs, displays):
                     title="Network Traffic per App (MB per 60s)",
                     yaxis_title="MB", barmode="stack", height=300,
                     legend=dict(orientation="h", y=1.0, yanchor="bottom", x=0, font=dict(size=9)),
+                    xaxis=dict(range=[x_min, x_max]),
                 )
                 children.append(_full(_timeline_graph(fig_net, 300)))
 
@@ -1174,12 +1199,44 @@ def _build_touch_tab(dfs, displays):
     children = []
     all_touch = pd.concat(touch_dfs, ignore_index=True)
 
-    # Heatmaps per display
+    # --- 1) Touch Rate vs Dropped Frames ---
+    df_fps = dfs.get("Display_FrameRate", pd.DataFrame())
+    fig_touch_fps = go.Figure()
+    if not all_touch.empty and not df_fps.empty:
+        fps_exp = expand_samples(df_fps)
+        if "dropped" in fps_exp.columns and "datetime" in fps_exp.columns:
+            fig_touch_fps = make_subplots(specs=[[{"secondary_y": True}]])
+            fps_exp["time_bin"] = fps_exp["datetime"].dt.floor("5s")
+            drops = fps_exp.groupby("time_bin")["dropped"].sum().reset_index()
+            fig_touch_fps.add_trace(go.Scatter(
+                x=drops["time_bin"], y=drops["dropped"],
+                mode="lines", name="Dropped Frames",
+                line=dict(color="#e74c3c", width=2)),
+                secondary_y=True)
+            if "displayId" in all_touch.columns:
+                for did in sorted(all_touch["displayId"].dropna().unique()):
+                    did_int = int(did)
+                    if did_int not in displays:
+                        continue
+                    df_d = all_touch[all_touch["displayId"] == did_int].copy()
+                    df_d["time_bin"] = df_d["datetime"].dt.floor("5s")
+                    rate_d = df_d.groupby("time_bin").size().reset_index(name="touches")
+                    rate_d["tpm"] = rate_d["touches"] * 12
+                    fig_touch_fps.add_trace(go.Bar(
+                        x=rate_d["time_bin"], y=rate_d["tpm"],
+                        name=f"Touches — {DISPLAY_NAMES.get(did_int, '')}",
+                        marker_color=DISPLAY_COLORS.get(did_int, "#888"),
+                        opacity=0.7), secondary_y=False)
+            fig_touch_fps.update_layout(title="Touch Rate vs Dropped Frames", barmode="stack")
+            fig_touch_fps.update_yaxes(title_text="Touches/min", secondary_y=False)
+            fig_touch_fps.update_yaxes(title_text="Dropped Frames", secondary_y=True)
+    children.append(_full(_graph(fig_touch_fps, 400)))
+
+    # --- 2) Touch Heatmaps — one per row, fixed aspect ratio ---
     heatmap_actions = ["Touch_Down", "Touch_Swipe"]
     heatmap_dfs = [dfs.get(a, pd.DataFrame()) for a in heatmap_actions if not dfs.get(a, pd.DataFrame()).empty]
     df_heatmap = pd.concat(heatmap_dfs, ignore_index=True) if heatmap_dfs else pd.DataFrame()
 
-    heatmap_figs = []
     if not df_heatmap.empty and "displayId" in df_heatmap.columns:
         for did in sorted(displays):
             if did in TOUCH_EXCLUDED_DISPLAYS:
@@ -1201,55 +1258,13 @@ def _build_touch_tab(dfs, displays):
             ))
             fig.add_shape(type="rect", x0=0, y0=0, x1=res[0], y1=res[1],
                           line=dict(color="#555", width=2))
-            fig_h = min(250, int(280 * res[1] / res[0]) + 40)
             fig.update_layout(
                 title=f"Touch Heatmap — {name} (n={n})",
                 xaxis=dict(range=[0, res[0]], showgrid=False, constrain="domain"),
                 yaxis=dict(range=[res[1], 0], showgrid=False, scaleanchor="x", constrain="domain"),
             )
-            heatmap_figs.append(_graph(fig, fig_h))
-
-    if heatmap_figs:
-        children.append(html.Div(
-            style={"display": "grid", "gridTemplateColumns": f"repeat({min(len(heatmap_figs), 3)}, 1fr)",
-                   "gap": "8px", "marginBottom": "20px"},
-            children=heatmap_figs,
-        ))
-
-    # Touch Rate vs Dropped Frames & FPS
-    df_fps = dfs.get("Display_FrameRate", pd.DataFrame())
-    fig_touch_fps = go.Figure()
-    if not all_touch.empty and not df_fps.empty:
-        fps_exp = expand_samples(df_fps)
-        if "dropped" in fps_exp.columns and "datetime" in fps_exp.columns:
-            fig_touch_fps = make_subplots(specs=[[{"secondary_y": True}]])
-            # Dropped frames as line (reported every 5s, so continuous)
-            fps_exp["time_bin"] = fps_exp["datetime"].dt.floor("5s")
-            drops = fps_exp.groupby("time_bin")["dropped"].sum().reset_index()
-            fig_touch_fps.add_trace(go.Scatter(
-                x=drops["time_bin"], y=drops["dropped"],
-                mode="lines", name="Dropped Frames",
-                line=dict(color="#e74c3c", width=2)),
-                secondary_y=True)
-            # Touch rate as bars (per 5 seconds, sparse)
-            if "displayId" in all_touch.columns:
-                for did in sorted(all_touch["displayId"].dropna().unique()):
-                    did_int = int(did)
-                    if did_int not in displays:
-                        continue
-                    df_d = all_touch[all_touch["displayId"] == did_int].copy()
-                    df_d["time_bin"] = df_d["datetime"].dt.floor("5s")
-                    rate_d = df_d.groupby("time_bin").size().reset_index(name="touches")
-                    rate_d["tpm"] = rate_d["touches"] * 12  # per minute from 5s bins
-                    fig_touch_fps.add_trace(go.Bar(
-                        x=rate_d["time_bin"], y=rate_d["tpm"],
-                        name=f"Touches — {DISPLAY_NAMES.get(did_int, '')}",
-                        marker_color=DISPLAY_COLORS.get(did_int, "#888"),
-                        opacity=0.7), secondary_y=False)
-            fig_touch_fps.update_layout(title="Touch Rate vs Dropped Frames", barmode="stack")
-            fig_touch_fps.update_yaxes(title_text="Touches/min", secondary_y=False)
-            fig_touch_fps.update_yaxes(title_text="Dropped Frames", secondary_y=True)
-    children.append(_full(_graph(fig_touch_fps, 400)))
+            fig_h = min(350, int(400 * res[1] / res[0]) + 60)
+            children.append(_full(_graph(fig, fig_h)))
 
     return html.Div(children)
 
@@ -1276,27 +1291,20 @@ def _build_performance_tab(dfs):
                                   annotation_text=f"Total: {total_mb:.0f} MB")
             fig_mem.update_layout(title="Memory Over Time", yaxis_title="MB")
 
-    # FPS + Dropped Frames combined
+    children.append(_full(_graph(fig_mem, 380)))
+
+    # Dropped Frames (own row)
     df_fps = dfs.get("Display_FrameRate", pd.DataFrame())
-    fig_fps = go.Figure()
     if not df_fps.empty:
         fps_exp = expand_samples(df_fps)
-        if "fps" in fps_exp.columns and "datetime" in fps_exp.columns:
-            fig_fps = make_subplots(specs=[[{"secondary_y": True}]])
-            fig_fps.add_trace(go.Scatter(x=fps_exp["datetime"], y=fps_exp["fps"],
-                                          mode="lines+markers", name="FPS",
-                                          line=dict(color="#0f9b8e")), secondary_y=False)
-            fig_fps.add_hline(y=60, line_dash="dash", line_color="green",
-                              annotation_text="60fps", secondary_y=False)
-            if "dropped" in fps_exp.columns:
-                fig_fps.add_trace(go.Bar(x=fps_exp["datetime"], y=fps_exp["dropped"],
-                                          name="Dropped Frames", marker_color="rgba(231,76,60,0.85)",
-                                          ), secondary_y=True)
-            fig_fps.update_layout(title="Frame Rate & Dropped Frames")
-            fig_fps.update_yaxes(title_text="FPS", secondary_y=False)
-            fig_fps.update_yaxes(title_text="Dropped", secondary_y=True)
-
-    children.append(_row(_graph(fig_mem, 380), _graph(fig_fps, 380)))
+        if "dropped" in fps_exp.columns and "datetime" in fps_exp.columns:
+            fig_dropped = go.Figure()
+            fig_dropped.add_trace(go.Bar(
+                x=fps_exp["datetime"], y=fps_exp["dropped"],
+                name="Dropped Frames", marker_color="rgba(231,76,60,0.85)",
+            ))
+            fig_dropped.update_layout(title="Dropped Frames", yaxis_title="Frames")
+            children.append(_full(_graph(fig_dropped, 350)))
 
     # CPU Usage
     df_cpu = dfs.get("CPU_Usage", pd.DataFrame())
