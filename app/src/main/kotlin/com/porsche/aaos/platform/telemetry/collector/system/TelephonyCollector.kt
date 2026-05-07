@@ -2,7 +2,6 @@ package com.porsche.aaos.platform.telemetry.collector.system
 
 import android.content.Context
 import android.telephony.PhoneStateListener
-import android.telephony.SignalStrength
 import android.telephony.TelephonyManager
 import com.porsche.aaos.platform.telemetry.collector.Collector
 import com.porsche.aaos.platform.telemetry.telemetry.Telemetry
@@ -28,14 +27,13 @@ class TelephonyCollector @Inject constructor(
 
     // Previous state tracking for prev/current payloads
     private var previousCallState: Map<String, Any>? = null
-    private var previousSignalLevel: Map<String, Any>? = null
 
     override suspend fun start() {
-        logger.i(TAG, "Starting telephony monitoring")
+        logger.i(TAG, "Starting telephony monitoring (call state + SIM info)")
         val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
         telephonyManager = tm
 
-        // Emit initial state
+        // Emit initial SIM/network state
         sendTelephonyState(tm)
 
         // PhoneStateListener must be created on a thread with a Looper
@@ -62,34 +60,10 @@ class TelephonyCollector @Inject constructor(
                     )
                     previousCallState = current
                 }
-
-                override fun onSignalStrengthsChanged(signalStrength: SignalStrength?) {
-                    val current = mapOf(
-                        "level" to (signalStrength?.level ?: -1),
-                    )
-                    if (current == previousSignalLevel) return
-                    telemetry.send(
-                        TelemetryEvent(
-                            signalId = signalId,
-                            payload = mapOf(
-                                "actionName" to "Telephony_SignalStrengthChanged",
-                                "trigger" to "system",
-                                "metadata" to mapOf(
-                                    "previous" to previousSignalLevel,
-                                    "current" to current,
-                                ),
-                            ),
-                        ),
-                    )
-                    previousSignalLevel = current
-                }
             }
             phoneStateListener = listener
 
-            tm.listen(
-                listener,
-                PhoneStateListener.LISTEN_CALL_STATE or PhoneStateListener.LISTEN_SIGNAL_STRENGTHS,
-            )
+            tm.listen(listener, PhoneStateListener.LISTEN_CALL_STATE)
         }
     }
 

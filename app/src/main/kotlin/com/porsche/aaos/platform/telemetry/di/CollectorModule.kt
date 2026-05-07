@@ -7,10 +7,12 @@ import com.porsche.aaos.platform.telemetry.collector.system.AppLifecycleCollecto
 import com.porsche.aaos.platform.telemetry.collector.system.AudioCollector
 import com.porsche.aaos.platform.telemetry.collector.system.ConnectivityCollector
 import com.porsche.aaos.platform.telemetry.collector.system.FrameRateCollector
+import com.porsche.aaos.platform.telemetry.collector.system.LocationCollector
 import com.porsche.aaos.platform.telemetry.collector.system.MemoryCollector
 import com.porsche.aaos.platform.telemetry.collector.system.PackageCollector
 import com.porsche.aaos.platform.telemetry.collector.system.ProcessCollector
 import com.porsche.aaos.platform.telemetry.collector.system.SensorBatteryCollector
+import com.porsche.aaos.platform.telemetry.collector.system.StorageCollector
 import com.porsche.aaos.platform.telemetry.collector.system.TelephonyCollector
 import com.porsche.aaos.platform.telemetry.collector.system.TimeChangeCollector
 import com.porsche.aaos.platform.telemetry.collector.system.TouchInputCollector
@@ -90,4 +92,12 @@ abstract class CollectorModule {
     @Binds
     @IntoSet
     abstract fun bindFrameRateCollector(impl: FrameRateCollector): Collector
+
+    @Binds
+    @IntoSet
+    abstract fun bindStorageCollector(impl: StorageCollector): Collector
+
+    @Binds
+    @IntoSet
+    abstract fun bindLocationCollector(impl: LocationCollector): Collector
 }

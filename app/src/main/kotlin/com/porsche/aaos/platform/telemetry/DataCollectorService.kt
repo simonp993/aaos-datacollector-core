@@ -179,6 +179,8 @@ class DataCollectorService : Service() {
         "Telephony" to true,
         "VehicleProperty" to true,
         "FrameRate" to true,
+        "Storage" to true,
+        "Location" to true,
     )
 
     override fun onCreate() {
