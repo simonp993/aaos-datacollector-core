@@ -1,0 +1,17 @@
+{
+  "servers": {
+    "code-review-graph": {
+      "type": "stdio",
+      "command": "${workspaceFolder}/tools/code-graph/.venv/bin/code-review-graph",
+      "args": ["serve"]
+    },
+    "github-mcp": {
+      "url": "https://api.githubcopilot.com/mcp/",
+      "type": "http"
+    },
+    "skyway-jira": {
+      "url": "https://mcp.skyway.porsche.com/mcp",
+      "type": "http"
+    }
+  }
+}
