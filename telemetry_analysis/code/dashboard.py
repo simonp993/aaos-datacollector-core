@@ -18,7 +18,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from dash import Dash, Input, Output, callback, dcc, html
+from dash import Dash, Input, Output, State, callback, ctx, dcc, html
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -246,16 +246,48 @@ app.layout = html.Div(
             ],
         ),
 
-        # Filters row
+        # Filters area
         html.Div(
-            style={"display": "flex", "gap": "16px", "alignItems": "flex-end",
-                   "marginBottom": "24px", "flexWrap": "wrap",
-                   "backgroundColor": "#ffffff", "padding": "16px 20px", "borderRadius": "8px",
-                   "boxShadow": "0 1px 3px rgba(0,0,0,0.08)"},
+            style={"marginBottom": "24px", "backgroundColor": "#ffffff", "padding": "16px 20px",
+                   "borderRadius": "8px", "boxShadow": "0 1px 3px rgba(0,0,0,0.08)"},
             children=[
+                # Row 1: Start / End datetime pickers
+                html.Div(
+                    style={"display": "flex", "gap": "16px", "alignItems": "flex-end",
+                           "marginBottom": "12px"},
+                    children=[
+                        html.Div([
+                            html.Label("Start", style={"fontSize": "11px", "color": "#888",
+                                                        "display": "block", "marginBottom": "4px"}),
+                            dcc.Input(
+                                id="start-datetime",
+                                type="text",
+                                value=MIN_DT.strftime("%Y-%m-%d %H:%M:%S"),
+                                style={"fontSize": "13px", "padding": "6px 10px",
+                                       "border": "1px solid #ddd", "borderRadius": "4px",
+                                       "width": "180px"},
+                            ),
+                        ]),
+                        html.Div([
+                            html.Label("End", style={"fontSize": "11px", "color": "#888",
+                                                      "display": "block", "marginBottom": "4px"}),
+                            dcc.Input(
+                                id="end-datetime",
+                                type="text",
+                                value=MAX_DT.strftime("%Y-%m-%d %H:%M:%S"),
+                                style={"fontSize": "13px", "padding": "6px 10px",
+                                       "border": "1px solid #ddd", "borderRadius": "4px",
+                                       "width": "180px"},
+                            ),
+                        ]),
+                        html.Span(
+                            f"Range: {MIN_DT.strftime('%Y-%m-%d %H:%M')} — {MAX_DT.strftime('%Y-%m-%d %H:%M')}",
+                            style={"color": "#aaa", "fontSize": "11px", "paddingBottom": "6px"},
+                        ),
+                    ],
+                ),
+                # Row 2: Time slider (full width)
                 html.Div([
-                    html.Label("Time Slider", style={"fontSize": "11px", "color": "#888", "display": "block",
-                                                      "marginBottom": "4px"}),
                     dcc.RangeSlider(
                         id="time-slider",
                         min=MIN_TS, max=MAX_TS, value=[MIN_TS, MAX_TS],
@@ -264,39 +296,44 @@ app.layout = html.Div(
                                for t in [MIN_TS + i * (MAX_TS - MIN_TS) / 4 for i in range(5)]},
                         tooltip={"always_visible": False},
                     ),
-                ], style={"flex": "2", "minWidth": "250px",
-                          "--accent": "#0f9b8e",
-                          }),
-                html.Div([
-                    html.Label("Displays", style={"fontSize": "11px", "color": "#888", "display": "block",
-                                                    "marginBottom": "4px"}),
-                    dcc.Dropdown(
-                        id="display-filter",
-                        options=[{"label": DISPLAY_NAMES.get(d, f"Display {d}"), "value": d} for d in ALL_DISPLAYS],
-                        value=ALL_DISPLAYS, multi=True, placeholder="All displays",
-                        style={"minWidth": "180px"},
-                    ),
-                ]),
-                html.Div([
-                    html.Label("Apps", style={"fontSize": "11px", "color": "#888", "display": "block",
-                                               "marginBottom": "4px"}),
-                    dcc.Dropdown(
-                        id="app-filter",
-                        options=[{"label": _short_name(a), "value": a} for a in ALL_APPS],
-                        value=[], multi=True, placeholder="All apps",
-                        style={"minWidth": "200px"},
-                    ),
-                ]),
-                html.Div([
-                    html.Label("Trigger", style={"fontSize": "11px", "color": "#888", "display": "block",
-                                                   "marginBottom": "4px"}),
-                    dcc.Dropdown(
-                        id="trigger-filter",
-                        options=[{"label": t, "value": t} for t in ALL_TRIGGERS],
-                        value=[], multi=True, placeholder="All triggers",
-                        style={"minWidth": "150px"},
-                    ),
-                ]),
+                ], style={"marginBottom": "12px"}),
+                # Row 3: Dropdowns
+                html.Div(
+                    style={"display": "flex", "gap": "16px", "alignItems": "flex-end", "flexWrap": "wrap"},
+                    children=[
+                        html.Div([
+                            html.Label("Displays", style={"fontSize": "11px", "color": "#888",
+                                                           "display": "block", "marginBottom": "4px"}),
+                            dcc.Dropdown(
+                                id="display-filter",
+                                options=[{"label": DISPLAY_NAMES.get(d, f"Display {d}"), "value": d}
+                                         for d in ALL_DISPLAYS],
+                                value=ALL_DISPLAYS, multi=True, placeholder="All displays",
+                                style={"minWidth": "200px"},
+                            ),
+                        ]),
+                        html.Div([
+                            html.Label("Apps", style={"fontSize": "11px", "color": "#888",
+                                                       "display": "block", "marginBottom": "4px"}),
+                            dcc.Dropdown(
+                                id="app-filter",
+                                options=[{"label": _short_name(a), "value": a} for a in ALL_APPS],
+                                value=[], multi=True, placeholder="All apps",
+                                style={"minWidth": "200px"},
+                            ),
+                        ]),
+                        html.Div([
+                            html.Label("Trigger", style={"fontSize": "11px", "color": "#888",
+                                                          "display": "block", "marginBottom": "4px"}),
+                            dcc.Dropdown(
+                                id="trigger-filter",
+                                options=[{"label": t, "value": t} for t in ALL_TRIGGERS],
+                                value=[], multi=True, placeholder="All triggers",
+                                style={"minWidth": "150px"},
+                            ),
+                        ]),
+                    ],
+                ),
             ],
         ),
 
@@ -377,6 +414,16 @@ def _graph(fig, height=400):
     return dcc.Graph(figure=fig, config={"displayModeBar": True, "displaylogo": False})
 
 
+# Consistent margins for timeline charts so x-axes align
+_TIMELINE_MARGIN = dict(l=120, r=40, t=40, b=30)
+
+
+def _timeline_graph(fig, height=400):
+    _apply_theme(fig, height)
+    fig.update_layout(margin=_TIMELINE_MARGIN)
+    return dcc.Graph(figure=fig, config={"displayModeBar": True, "displaylogo": False})
+
+
 def _row(*children):
     return html.Div(style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "gap": "20px",
                            "marginBottom": "20px"}, children=list(children))
@@ -389,6 +436,41 @@ def _full(*children):
 # ---------------------------------------------------------------------------
 # Callbacks
 # ---------------------------------------------------------------------------
+
+
+@callback(
+    Output("time-slider", "value"),
+    Output("start-datetime", "value"),
+    Output("end-datetime", "value"),
+    Input("start-datetime", "n_submit"),
+    Input("end-datetime", "n_submit"),
+    Input("time-slider", "value"),
+    State("start-datetime", "value"),
+    State("end-datetime", "value"),
+    prevent_initial_call=True,
+)
+def sync_time_controls(_s_submit, _e_submit, slider_val, start_str, end_str):
+    """Keep datetime text inputs and slider in sync."""
+    trigger = ctx.triggered_id
+    if trigger in ("start-datetime", "end-datetime"):
+        # Text input submitted — parse and push to slider
+        try:
+            start_ts = int(pd.to_datetime(start_str).timestamp() * 1000)
+        except Exception:
+            start_ts = MIN_TS
+        try:
+            end_ts = int(pd.to_datetime(end_str).timestamp() * 1000)
+        except Exception:
+            end_ts = MAX_TS
+        start_ts = max(MIN_TS, min(start_ts, MAX_TS))
+        end_ts = max(MIN_TS, min(end_ts, MAX_TS))
+        s = pd.to_datetime(start_ts, unit="ms").strftime("%Y-%m-%d %H:%M:%S")
+        e = pd.to_datetime(end_ts, unit="ms").strftime("%Y-%m-%d %H:%M:%S")
+        return [start_ts, end_ts], s, e
+    # Slider moved — update text inputs
+    s = pd.to_datetime(slider_val[0], unit="ms").strftime("%Y-%m-%d %H:%M:%S")
+    e = pd.to_datetime(slider_val[1], unit="ms").strftime("%Y-%m-%d %H:%M:%S")
+    return slider_val, s, e
 
 
 @callback(
@@ -524,10 +606,9 @@ def _build_timeline_tab(events, dfs, displays):
             ),
             xaxis=dict(type="date"),
             height=80 * n_disp + 120,
-            legend=dict(orientation="h", y=-0.25, x=0, font=dict(size=9)),
-            margin=dict(l=120, r=30, t=40, b=60),
+            legend=dict(orientation="h", y=1.0, yanchor="bottom", x=0, font=dict(size=9)),
         )
-        children.append(_full(_graph(fig_app, 80 * n_disp + 120)))
+        children.append(_full(_timeline_graph(fig_app, 80 * n_disp + 120)))
 
     # --- 2) Touch Rate (bars per 5s) ---
     touch_actions = ["Touch_Down", "Touch_Swipe"]
@@ -554,8 +635,9 @@ def _build_timeline_tab(events, dfs, displays):
             fig_touch.update_layout(
                 title="Touch Rate (per min)", yaxis_title="Touches/min",
                 barmode="overlay", height=250,
+                legend=dict(orientation="h", y=1.0, yanchor="bottom", x=0, font=dict(size=9)),
             )
-            children.append(_full(_graph(fig_touch, 250)))
+            children.append(_full(_timeline_graph(fig_touch, 250)))
 
     # --- 3) FPS + Dropped Frames ---
     df_fps = dfs.get("Display_FrameRate", pd.DataFrame())
@@ -575,9 +657,12 @@ def _build_timeline_tab(events, dfs, displays):
                     name="Dropped", marker_color="rgba(231,76,60,0.85)",
                 ), secondary_y=True)
                 fig_fps.update_yaxes(title_text="Dropped", secondary_y=True)
-            fig_fps.update_layout(title="FPS & Dropped Frames", height=280)
+            fig_fps.update_layout(
+                title="FPS & Dropped Frames", height=280,
+                legend=dict(orientation="h", y=1.0, yanchor="bottom", x=0, font=dict(size=9)),
+            )
             fig_fps.update_yaxes(title_text="FPS", secondary_y=False)
-            children.append(_full(_graph(fig_fps, 280)))
+            children.append(_full(_timeline_graph(fig_fps, 280)))
 
     # --- 4) Available Memory ---
     df_mem = dfs.get("Memory_Usage", pd.DataFrame())
@@ -599,10 +684,16 @@ def _build_timeline_tab(events, dfs, displays):
             if total_mb:
                 fig_mem.add_hline(y=total_mb, line_dash="dash", line_color="red",
                                   annotation_text=f"Total: {total_mb:.0f} MB")
+                fig_mem.add_trace(go.Scatter(
+                    x=[None], y=[None], mode="lines",
+                    line=dict(color="red", dash="dash", width=2),
+                    name=f"Total ({total_mb:.0f} MB)", showlegend=True,
+                ))
             fig_mem.update_layout(
                 title="Available Memory (MB)", yaxis_title="MB", height=250,
+                legend=dict(orientation="h", y=1.0, yanchor="bottom", x=0, font=dict(size=9)),
             )
-            children.append(_full(_graph(fig_mem, 250)))
+            children.append(_full(_timeline_graph(fig_mem, 250)))
 
     # --- 5) Network Traffic per app (stacked bars per 60s window) ---
     df_perapp = dfs.get("Network_PerAppTraffic", pd.DataFrame())
@@ -653,9 +744,9 @@ def _build_timeline_tab(events, dfs, displays):
                 fig_net.update_layout(
                     title="Network Traffic per App (MB per 60s)",
                     yaxis_title="MB", barmode="stack", height=300,
-                    legend=dict(orientation="h", y=-0.25, x=0, font=dict(size=9)),
+                    legend=dict(orientation="h", y=1.0, yanchor="bottom", x=0, font=dict(size=9)),
                 )
-                children.append(_full(_graph(fig_net, 300)))
+                children.append(_full(_timeline_graph(fig_net, 300)))
 
     if not children or len(children) <= 1:
         children.append(html.P("Insufficient data for timeline.", style={"color": "#888"}))
@@ -1118,23 +1209,12 @@ def _build_touch_tab(dfs, displays):
             )
             heatmap_figs.append(_graph(fig, fig_h))
 
-    # Touch rate
-    fig_rate = go.Figure()
-    if "datetime" in all_touch.columns:
-        all_touch["time_bin"] = all_touch["datetime"].dt.floor("30s")
-        rate = all_touch.groupby("time_bin").size().reset_index(name="touches")
-        rate["touches_per_min"] = rate["touches"] * 2
-        fig_rate = px.line(rate, x="time_bin", y="touches_per_min",
-                           title="Touch Rate (per minute)", markers=True)
-
     if heatmap_figs:
         children.append(html.Div(
             style={"display": "grid", "gridTemplateColumns": f"repeat({min(len(heatmap_figs), 3)}, 1fr)",
                    "gap": "8px", "marginBottom": "20px"},
             children=heatmap_figs,
         ))
-
-    children.append(_full(_graph(fig_rate, 300)))
 
     # Touch Rate vs Dropped Frames & FPS
     df_fps = dfs.get("Display_FrameRate", pd.DataFrame())
@@ -1166,7 +1246,7 @@ def _build_touch_tab(dfs, displays):
                         name=f"Touches — {DISPLAY_NAMES.get(did_int, '')}",
                         marker_color=DISPLAY_COLORS.get(did_int, "#888"),
                         opacity=0.7), secondary_y=False)
-            fig_touch_fps.update_layout(title="Touch Rate vs Dropped Frames", barmode="overlay")
+            fig_touch_fps.update_layout(title="Touch Rate vs Dropped Frames", barmode="stack")
             fig_touch_fps.update_yaxes(title_text="Touches/min", secondary_y=False)
             fig_touch_fps.update_yaxes(title_text="Dropped Frames", secondary_y=True)
     children.append(_full(_graph(fig_touch_fps, 400)))
