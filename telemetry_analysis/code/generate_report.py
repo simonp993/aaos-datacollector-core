@@ -871,6 +871,50 @@ def build_network(dfs: dict) -> str:
             fig.update_layout(height=350)
             figs.append(fig)
 
+            # Signal Quality (%) + Bandwidth (Mbps)
+            has_bw = ("maxDownstreamBandwidthKbps" in sig_expanded.columns
+                      and "maxUpstreamBandwidthKbps" in sig_expanded.columns)
+            # Compute quality: WiFi → 2*(dBm+100) clamped [0,100]
+            sig_expanded["quality_pct"] = (2 * (sig_expanded["signalStrengthDbm"] + 100)).clip(0, 100)
+
+            fig_q = make_subplots(specs=[[{"secondary_y": True}]])
+            if has_bw:
+                sig_expanded["downstream_mbps"] = sig_expanded["maxDownstreamBandwidthKbps"] / 1000
+                sig_expanded["upstream_mbps"] = sig_expanded["maxUpstreamBandwidthKbps"] / 1000
+                fig_q.add_trace(
+                    go.Scatter(
+                        x=sig_expanded["datetime"], y=sig_expanded["downstream_mbps"],
+                        mode="lines", name="Max Download (Mbps)",
+                        line=dict(color="#5b8def", width=1.5),
+                    ),
+                    secondary_y=True,
+                )
+                fig_q.add_trace(
+                    go.Scatter(
+                        x=sig_expanded["datetime"], y=sig_expanded["upstream_mbps"],
+                        mode="lines", name="Max Upload (Mbps)",
+                        line=dict(color="#f39c12", width=1.5),
+                    ),
+                    secondary_y=True,
+                )
+            # Quality line added last so it renders on top
+            fig_q.add_trace(
+                go.Scatter(
+                    x=sig_expanded["datetime"], y=sig_expanded["quality_pct"],
+                    mode="lines+markers", name="Signal Quality (%)",
+                    line=dict(color="#2ecc71", width=3, dash="dash"),
+                    marker=dict(size=4),
+                ),
+                secondary_y=False,
+            )
+            fig_q.update_layout(
+                title=f"Signal Quality & Bandwidth ({transport})",
+                height=350,
+            )
+            fig_q.update_yaxes(title_text="Quality (%)", range=[0, 105], secondary_y=False)
+            fig_q.update_yaxes(title_text="Mbps", secondary_y=True)
+            figs.append(fig_q)
+
     # Transport note
     df_avail = dfs.get("Connectivity_Available", pd.DataFrame())
     if not df_avail.empty and "transport" in df_avail.columns:
@@ -1229,6 +1273,112 @@ def build_correlations(dfs: dict) -> str:
         first_touch_ts = all_touch["timestamp"].min()
         latency_s = (first_touch_ts - boot_ts) / 1000
         latency_html = f"<p><strong>Boot → First Touch Latency:</strong> {latency_s:.1f}s</p>"
+
+    # --- App Lifecycle vs Network Traffic ---
+    df_perapp = dfs.get("Network_PerAppTraffic", pd.DataFrame())
+    df_focus_lc = dfs.get("App_FocusChanged", pd.DataFrame())
+    if not df_perapp.empty and "apps" in df_perapp.columns and not df_focus_lc.empty:
+        # Build per-app traffic timeline: compute rate (delta bytes) between samples
+        traffic_rows = []
+        for _, row in df_perapp.sort_values("timestamp").iterrows():
+            ts = row.get("timestamp")
+            dt = row.get("datetime")
+            apps_data = row.get("apps", [])
+            if not apps_data or not isinstance(apps_data, list):
+                continue
+            for app in apps_data:
+                if not isinstance(app, dict):
+                    continue
+                pkgs = app.get("packages", [])
+                label = pkgs[0] if pkgs else f"uid:{app.get('uid', 0)}"
+                rx = app.get("rxBytes", 0)
+                tx = app.get("txBytes", 0)
+                traffic_rows.append({"datetime": dt, "timestamp": ts, "app": label, "rx": rx, "tx": tx})
+
+        if traffic_rows:
+            df_tr = pd.DataFrame(traffic_rows)
+            # Compute delta traffic per app between consecutive samples
+            df_tr = df_tr.sort_values(["app", "timestamp"])
+            df_tr["total"] = df_tr["rx"] + df_tr["tx"]
+            df_tr["delta"] = df_tr.groupby("app")["total"].diff().fillna(0).clip(lower=0)
+            df_tr["delta_mb"] = df_tr["delta"] / (1024 * 1024)
+
+            # Pick top apps by total traffic
+            app_totals = df_tr.groupby("app")["delta"].sum().sort_values(ascending=False)
+            # Filter to apps with >1KB total delta
+            top_apps = [a for a in app_totals.index if app_totals[a] > 1024][:8]
+
+            if top_apps:
+                # Build foreground periods per app (across all displays)
+                fg_periods = defaultdict(list)  # app -> list of (start, end, display_id)
+                df_fc = df_focus_lc.copy().sort_values("timestamp")
+                df_fc["pkg"] = df_fc.apply(
+                    lambda r: str(r.get("current.package", "") or ""), axis=1
+                )
+                df_fc["did"] = df_fc.apply(
+                    lambda r: int(r.get("current.displayId") or 0) if pd.notna(r.get("current.displayId")) else 0,
+                    axis=1,
+                )
+                # For each display, compute foreground intervals
+                for did in df_fc["did"].unique():
+                    if did >= 10:
+                        continue
+                    df_d = df_fc[df_fc["did"] == did].reset_index(drop=True)
+                    for i in range(len(df_d)):
+                        pkg = df_d.iloc[i]["pkg"]
+                        start = df_d.iloc[i]["datetime"]
+                        end = df_d.iloc[i + 1]["datetime"] if i + 1 < len(df_d) else df_tr["datetime"].max()
+                        fg_periods[pkg].append((start, end, did))
+
+                n_apps = len(top_apps)
+                fig = make_subplots(
+                    rows=n_apps, cols=1, shared_xaxes=True,
+                    subplot_titles=[_short_name(a) for a in top_apps],
+                    vertical_spacing=0.03,
+                )
+
+                for idx, app in enumerate(top_apps, 1):
+                    app_df = df_tr[df_tr["app"] == app]
+                    # Traffic rate line
+                    fig.add_trace(
+                        go.Scatter(
+                            x=app_df["datetime"], y=app_df["delta_mb"],
+                            mode="lines", name=f"{_short_name(app)} traffic",
+                            line=dict(color="#e74c3c", width=2),
+                            showlegend=(idx == 1),
+                            legendgroup="traffic",
+                        ),
+                        row=idx, col=1,
+                    )
+                    # Foreground shading
+                    periods = fg_periods.get(app, [])
+                    added_legend = set()
+                    for start, end, did in periods:
+                        color = DISPLAY_COLORS.get(did, "#888888")
+                        dname = DISPLAY_NAMES.get(did, f"Display {did}")
+                        show_legend = (idx == 1 and did not in added_legend)
+                        added_legend.add(did)
+                        fig.add_trace(
+                            go.Scatter(
+                                x=[start, end, end, start, start],
+                                y=[0, 0, app_df["delta_mb"].max() * 1.1 if not app_df.empty else 1,
+                                   app_df["delta_mb"].max() * 1.1 if not app_df.empty else 1, 0],
+                                fill="toself", fillcolor=color, opacity=0.15,
+                                line=dict(width=0), mode="lines",
+                                name=f"Foreground — {dname}",
+                                showlegend=show_legend,
+                                legendgroup=f"fg_{did}",
+                            ),
+                            row=idx, col=1,
+                        )
+                    fig.update_yaxes(title_text="MB", row=idx, col=1)
+
+                fig.update_layout(
+                    title="App Lifecycle vs Network Traffic (shaded = foreground)",
+                    height=200 * n_apps + 100,
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
+                )
+                figs.append(fig)
 
     if not figs:
         return latency_html + "<p>Insufficient cross-collector data for correlations.</p>"
