@@ -10,6 +10,7 @@ import com.porsche.aaos.platform.telemetry.collector.system.CpuCollector
 import com.porsche.aaos.platform.telemetry.collector.system.FrameRateCollector
 import com.porsche.aaos.platform.telemetry.collector.system.LocationCollector
 import com.porsche.aaos.platform.telemetry.collector.system.MemoryCollector
+import com.porsche.aaos.platform.telemetry.collector.system.NavigationCollector
 import com.porsche.aaos.platform.telemetry.collector.system.PackageCollector
 import com.porsche.aaos.platform.telemetry.collector.system.ProcessCollector
 import com.porsche.aaos.platform.telemetry.collector.system.SelfMonitorCollector
@@ -103,6 +104,10 @@ abstract class CollectorModule {
     @Binds
     @IntoSet
     abstract fun bindLocationCollector(impl: LocationCollector): Collector
+
+    @Binds
+    @IntoSet
+    abstract fun bindNavigationCollector(impl: NavigationCollector): Collector
 
     @Binds
     @IntoSet

@@ -65,6 +65,7 @@ class DataCollectorService : Service() {
      *   adb logcat | grep "DataCollector:LogTelemetry.*FrameRateCollector"
      *   adb logcat | grep "DataCollector:LogTelemetry.*StorageCollector"
      *   adb logcat | grep "DataCollector:LogTelemetry.*LocationCollector"
+     *   adb logcat | grep "DataCollector:LogTelemetry.*NavigationCollector"
      *   adb logcat | grep "DataCollector:LogTelemetry.*PowerStateCollector"
      *
      * Multiple collectors:
@@ -78,6 +79,8 @@ class DataCollectorService : Service() {
      * DONE G2: Consistent timestamps — all use epochMillis (Long). Removed epochSec, iso8601.
      * DONE G5: Stagger cyclic collectors — deterministic offsets (2–9s) added to all batched
      *          collectors. Reduces burst load on telemetry sink.
+     * 
+     * TODO G3: make sure, display turn on and of works
      * 
      * TODO G3: Make sure that all events that might not be changed often (e.g. CarInfo) are 
      *          emitted at least once at startup, so we have that data point even if it doesn't change.
@@ -167,6 +170,12 @@ class DataCollectorService : Service() {
      *           state transitions. Requires android.car.permission.CAR_POWER.
      *           adb logcat | grep "DataCollector:LogTelemetry.*PowerStateCollector"
      *
+     * DONE C19: NavigationCollector (NEW) — emits Navigation_FocusChanged whenever app-focus
+     *           ownership changes (reason: gained/lost/changed), includes previous/current owner,
+     *           source type (carplay/android_auto/native/projection/none), and cluster navigation
+     *           state as context. Requires CAR_NAVIGATION_MANAGER, CAR_PROJECTION_STATUS.
+     *           adb logcat | grep "DataCollector:LogTelemetry.*NavigationCollector"
+     *
      * --- VERIFY ON REAL DEVICE ---
      *
      * TODO C12: AudioCollector — works on emulator (mute button not functional on emu).
@@ -208,6 +217,7 @@ class DataCollectorService : Service() {
         "FrameRate" to true,
         "Storage" to true,
         "Location" to true,
+        "Navigation" to true,
         "PowerState" to true,
     )
 

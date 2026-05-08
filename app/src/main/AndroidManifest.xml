@@ -35,6 +35,9 @@
     <uses-permission android:name="android.car.permission.CAR_CONTROL_AUDIO_VOLUME" />
     <uses-permission android:name="android.car.permission.CAR_VENDOR_EXTENSION" />
     <uses-permission android:name="android.car.permission.GET_CAR_VENDOR_CATEGORY_1" />
+    <uses-permission android:name="android.car.permission.CAR_NAVIGATION_MANAGER" />
+    <uses-permission android:name="android.car.permission.CAR_MONITOR_CLUSTER_NAVIGATION_STATE" />
+    <uses-permission android:name="android.car.permission.ACCESS_CAR_PROJECTION_STATUS" />
     <uses-permission android:name="android.car.permission.CAR_POWERTRAIN" />
     <uses-permission android:name="android.car.permission.CAR_DYNAMICS_STATE" />
     <uses-permission android:name="android.car.permission.CAR_EXTERIOR_LIGHTS" />
