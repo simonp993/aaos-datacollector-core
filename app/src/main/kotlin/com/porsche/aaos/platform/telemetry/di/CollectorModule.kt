@@ -4,6 +4,7 @@ import com.porsche.aaos.platform.telemetry.collector.Collector
 import com.porsche.aaos.platform.telemetry.collector.media.MediaPlaybackCollector
 import com.porsche.aaos.platform.telemetry.collector.network.NetworkStatsCollector
 import com.porsche.aaos.platform.telemetry.collector.system.AppLifecycleCollector
+import com.porsche.aaos.platform.telemetry.collector.system.AssistantCollector
 import com.porsche.aaos.platform.telemetry.collector.system.AudioCollector
 import com.porsche.aaos.platform.telemetry.collector.system.ConnectivityCollector
 import com.porsche.aaos.platform.telemetry.collector.system.CpuCollector
@@ -52,6 +53,10 @@ abstract class CollectorModule {
     @Binds
     @IntoSet
     abstract fun bindAppLifecycleCollector(impl: AppLifecycleCollector): Collector
+
+    @Binds
+    @IntoSet
+    abstract fun bindAssistantCollector(impl: AssistantCollector): Collector
 
     @Binds
     @IntoSet

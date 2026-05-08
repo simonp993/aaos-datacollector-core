@@ -67,6 +67,7 @@ class DataCollectorService : Service() {
      *   adb logcat | grep "DataCollector:LogTelemetry.*LocationCollector"
      *   adb logcat | grep "DataCollector:LogTelemetry.*NavigationCollector"
      *   adb logcat | grep "DataCollector:LogTelemetry.*PowerStateCollector"
+    *   adb logcat | grep "DataCollector:LogTelemetry.*AssistantCollector"
      *
      * Multiple collectors:
      *   adb logcat | grep -E "DataCollector:LogTelemetry.*(AppLifecycle|MediaPlayback)"
@@ -219,6 +220,7 @@ class DataCollectorService : Service() {
         "Location" to true,
         "Navigation" to true,
         "PowerState" to true,
+        "Assistant" to true,
     )
 
     override fun onCreate() {
