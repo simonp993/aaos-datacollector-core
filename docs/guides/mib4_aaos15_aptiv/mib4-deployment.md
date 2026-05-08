@@ -207,6 +207,87 @@ Stop it:
 
 ```bash
 adb shell am force-stop <app.package.id>
+
+### Real MIB4 Startup Notes (Important)
+
+On real MIB4 hardware, startup behavior differs from emulator expectations in two ways:
+
+1. `shell` cannot simulate boot or start this app's foreground service directly.
+2. The package can be installed but disabled for the active AAOS user.
+
+Observed symptoms:
+
+- `am broadcast -a android.intent.action.BOOT_COMPLETED ...` fails with `SecurityException`.
+- `am startservice` / `am start-foreground-service` from `shell` fails with permission denial.
+- App appears installed, but service never starts.
+
+#### Why this happens
+
+- Protected boot broadcasts are not sendable from `uid=2000` (`shell`).
+- Foreground service start restrictions on Android 14+/AAOS block direct `shell`-originated starts for this app.
+- Multi-user state: package enablement can differ per user (`enabled=0` on active user means no app startup there).
+
+#### Correct startup procedure on real MIB4
+
+Use this sequence after install:
+
+```bash
+PKG="com.porsche.aaos.platform.telemetry"
+SER="172.16.250.248:5555"
+
+# 1) Enable package for the active AAOS user
+CURRENT_USER=$(adb -s "$SER" shell am get-current-user | tr -d '\r')
+adb -s "$SER" shell "pm enable --user $CURRENT_USER $PKG"
+
+# 2) Verify user state (enabled should be 1 for active user)
+adb -s "$SER" shell "pm dump $PKG | grep -E 'User $CURRENT_USER:|enabled=' | head -2"
+
+# 3) Trigger startup from app context (not shell FGS start)
+# Example debug trigger activity in this repo:
+adb -s "$SER" shell "am start --user $CURRENT_USER -a com.porsche.aaos.platform.telemetry.action.START_SERVICE_ACTIVITY_DEBUG -n $PKG/.DebugStartActivity"
+
+# 4) Verify service
+adb -s "$SER" shell "dumpsys activity services | grep -n '$PKG/.DataCollectorService'"
+```
+
+#### Multi-User Enablement (Critical on AAOS Multi-User Systems)
+
+AAOS multi-user systems (e.g., MIB4) have multiple concurrent users (system user 0, headless users 10–12, foreground driver user 14). Package installation is user-scoped: a package installed on user 0 is **not automatically enabled** for other users.
+
+**You must explicitly enable the package for each system user:**
+
+```bash
+PKG="com.porsche.aaos.platform.telemetry"
+SER="172.16.250.248:5555"
+
+# 1) Discover all system users on the device
+adb -s "$SER" shell pm list users | grep "{" | awk '{print $2}' | sed 's/://'
+
+# Example output:
+#   0 (system)
+#   10 (headless)
+#   11 (headless)
+#   12 (headless)
+#   14 (foreground driver)
+
+# 2) Enable package for each user
+adb -s "$SER" shell pm enable --user 0 "$PKG"
+adb -s "$SER" shell pm enable --user 10 "$PKG"
+adb -s "$SER" shell pm enable --user 11 "$PKG"
+adb -s "$SER" shell pm enable --user 12 "$PKG"
+adb -s "$SER" shell pm enable --user 14 "$PKG"
+
+# 3) Verify enablement (all should show enabled=1)
+adb -s "$SER" shell pm dump "$PKG" | grep -E "User [0-9]+:" | grep enabled
+```
+
+**Note:** The service itself (`singleUser="true"`) runs only in user 0, but each user that may interact with or monitor the app must have the package enabled.
+
+Production recommendation:
+
+- Keep `BootReceiver` for real boot delivery from the system.
+- Ensure package/user enablement is handled in provisioning for **all active AAOS users** (not just the active user at install time).
+- Do not rely on `shell`-sent BOOT broadcasts or `shell` FGS starts for runtime validation on hardware.
 ```
 
 ### Verifying the App
@@ -235,6 +316,7 @@ A platform-signed app will show `SYSTEM` in `pkgFlags`. A user-installed app wil
 - **No emulator connected**: Run `adb devices` to check. See [mib4-avd-setup.md](mib4-avd-setup.md) for emulator launch instructions.
 - **App has no vehicle data on emulator**: The `mock` datasource uses stub data — this is expected. Use the `real` datasource build on hardware with a running VHAL.
 - **`SecurityException` in logs for Car API calls**: The APK is not recognised as a platform-signed app by the system. Verify the signing certificate matches (see Verifying APK Signature above).
+- **Installed but service never starts on hardware**: Check active user enablement (`pm enable --user <activeUser> <package>`), then start from app context (activity/receiver inside app process). `shell` cannot reliably simulate BOOT or FGS start on this target.
 
 ---
 
