@@ -30,9 +30,12 @@ class LocationCollector @Inject constructor(
     private var running = false
     private var locationManager: LocationManager? = null
     private var locationListener: LocationListener? = null
+    private var activeProvider: String? = null
+    @Volatile
+    private var latestLocation: Location? = null
 
-    // Batched samples: [timestampMillis, lat, lng, alt, speedMps, bearing, accuracyM]
-    private val samples = mutableListOf<List<Any>>()
+    // Batched samples: [timestampMillis, latitude, longitude, provider, providerEnabled, reason]
+    private val samples = mutableListOf<List<Any?>>()
 
     override suspend fun start() {
         running = true
@@ -44,19 +47,7 @@ class LocationCollector @Inject constructor(
 
             val listener = object : LocationListener {
                 override fun onLocationChanged(location: Location) {
-                    synchronized(samples) {
-                        samples.add(
-                            listOf(
-                                System.currentTimeMillis(),
-                                location.latitude,
-                                location.longitude,
-                                location.altitude,
-                                location.speed,
-                                location.bearing,
-                                location.accuracy,
-                            ),
-                        )
-                    }
+                    latestLocation = location
                 }
 
                 override fun onProviderEnabled(provider: String) {
@@ -85,6 +76,7 @@ class LocationCollector @Inject constructor(
             }
 
             logger.i(TAG, "Using provider: $provider")
+            activeProvider = provider
 
             @Suppress("MissingPermission")
             lm.requestLocationUpdates(
@@ -98,10 +90,17 @@ class LocationCollector @Inject constructor(
         // Stagger initial delay to spread flush bursts across collectors
         delay(STAGGER_DELAY_MS)
 
-        // Flush loop
+        // Sample every 5 seconds and flush every 60 seconds (12 samples per window).
+        var samplesSinceFlush = 0
         while (running && coroutineContext.isActive) {
-            delay(FLUSH_INTERVAL_MS)
-            flush()
+            delay(SAMPLE_INTERVAL_MS)
+            samplePoint()
+            samplesSinceFlush++
+
+            if (samplesSinceFlush >= (FLUSH_INTERVAL_MS / SAMPLE_INTERVAL_MS).toInt()) {
+                flush()
+                samplesSinceFlush = 0
+            }
         }
     }
 
@@ -112,7 +111,39 @@ class LocationCollector @Inject constructor(
         }
         locationListener = null
         locationManager = null
+        activeProvider = null
+        latestLocation = null
         logger.i(TAG, "Stopped")
+    }
+
+    private fun samplePoint() {
+        val now = System.currentTimeMillis()
+        val provider = activeProvider
+        val providerEnabled = provider?.let { locationManager?.isProviderEnabled(it) } ?: false
+        val location = latestLocation
+
+        val reason = when {
+            provider == null -> "provider_unavailable"
+            !providerEnabled -> "provider_disabled"
+            location == null -> "no_fix"
+            else -> "ok"
+        }
+
+        val latitude: Double? = if (reason == "ok") location?.latitude else null
+        val longitude: Double? = if (reason == "ok") location?.longitude else null
+
+        val row: List<Any?> = listOf(
+            now,
+            latitude,
+            longitude,
+            provider,
+            providerEnabled,
+            reason,
+        )
+
+        synchronized(samples) {
+            samples.add(row)
+        }
     }
 
     private fun flush() {
@@ -129,11 +160,12 @@ class LocationCollector @Inject constructor(
                                 "timestampMillis",
                                 "latitude",
                                 "longitude",
-                                "altitude",
-                                "speedMps",
-                                "bearing",
-                                "accuracyMeters",
+                                "provider",
+                                "providerEnabled",
+                                "reason",
                             ),
+                            "sampleIntervalMs" to SAMPLE_INTERVAL_MS,
+                            "flushIntervalMs" to FLUSH_INTERVAL_MS,
                             "samples" to samples.toList(),
                         ),
                     ),
