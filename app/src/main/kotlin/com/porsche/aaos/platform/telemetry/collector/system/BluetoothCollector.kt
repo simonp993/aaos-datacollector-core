@@ -8,6 +8,9 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.Handler
+import android.os.Looper
+import android.os.UserHandle
 import com.porsche.aaos.platform.telemetry.collector.Collector
 import com.porsche.aaos.platform.telemetry.core.logging.Logger
 import com.porsche.aaos.platform.telemetry.telemetry.Telemetry
@@ -32,8 +35,8 @@ class BluetoothCollector @Inject constructor(
     private var bluetoothManager: BluetoothManager? = null
     private var adapter: BluetoothAdapter? = null
 
-    // Batched HFP indicator samples: [timestampMillis, deviceAddress, batteryLevel, signalStrength]
-    private val indicatorSamples = mutableListOf<List<Any>>()
+    // Track last known battery level per device for on-change emission
+    private val lastBatteryLevel = mutableMapOf<String, Int>()
 
     // Track connected profiles per device for change detection
     private val connectedProfiles = mutableMapOf<String, MutableSet<String>>()
@@ -43,29 +46,43 @@ class BluetoothCollector @Inject constructor(
     private val monitoredProfiles = listOf(
         BluetoothProfile.A2DP,
         BluetoothProfile.HEADSET,
-        BluetoothProfile.HID_HOST,
     )
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
+            logger.d(TAG, "Received: ${intent.action}")
             val device = intent.getParcelableExtra<BluetoothDevice>(
                 BluetoothDevice.EXTRA_DEVICE,
-            ) ?: return
+            )
 
             when (intent.action) {
-                BluetoothDevice.ACTION_ACL_CONNECTED -> {
-                    sendConnectionEvent(device, "connected")
-                }
                 BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
-                    connectedProfiles.remove(device.address)
-                    sendConnectionEvent(device, "disconnected")
+                    // Clean up tracked state when physical link drops
+                    device?.let {
+                        connectedProfiles.remove(it.address)
+                        lastBatteryLevel.remove(it.address)
+                    }
                 }
                 BluetoothDevice.ACTION_BOND_STATE_CHANGED -> {
-                    val state = intent.getIntExtra(
-                        BluetoothDevice.EXTRA_BOND_STATE,
-                        BluetoothDevice.BOND_NONE,
-                    )
-                    sendBondEvent(device, state)
+                    device?.let {
+                        val state = intent.getIntExtra(
+                            BluetoothDevice.EXTRA_BOND_STATE,
+                            BluetoothDevice.BOND_NONE,
+                        )
+                        sendBondEvent(it, state)
+                    }
+                }
+                // Profile-level connection changes (what happens when you switch Phone/Music)
+                ACTION_A2DP_CONNECTION_STATE_CHANGED,
+                ACTION_HFP_CONNECTION_STATE_CHANGED -> {
+                    device?.let { handleProfileStateChange(intent, it) }
+                }
+                // Active device switched (which phone is active for audio/calls)
+                ACTION_A2DP_ACTIVE_DEVICE_CHANGED -> {
+                    sendActiveDeviceChanged(device, "a2dp")
+                }
+                ACTION_HFP_ACTIVE_DEVICE_CHANGED -> {
+                    sendActiveDeviceChanged(device, "hfp")
                 }
             }
         }
@@ -87,22 +104,21 @@ class BluetoothCollector @Inject constructor(
         registerReceiver()
         openProfileProxies()
 
-        // Initial startup snapshot after proxies connect
-        delay(STAGGER_DELAY_MS)
+        // Wait for profile proxies to connect before snapshot
+        delay(PROXY_CONNECT_DELAY_MS)
         sendStartupSnapshot()
 
-        // Poll HFP indicators every 5s, flush every 60s
-        var sampleCount = 0
+        // Poll battery + profile changes periodically
+        var pollCount = 0
         while (running && coroutineContext.isActive) {
-            pollIndicators()
-            sampleCount++
+            pollBatteryChanges()
+            pollCount++
 
-            if (sampleCount >= SAMPLES_PER_BATCH) {
-                flushIndicators()
+            if (pollCount >= POLLS_PER_PROFILE_CHECK) {
                 pollProfileChanges()
-                sampleCount = 0
+                pollCount = 0
             }
-            delay(SAMPLE_INTERVAL_MS)
+            delay(POLL_INTERVAL_MS)
         }
     }
 
@@ -117,17 +133,66 @@ class BluetoothCollector @Inject constructor(
         bluetoothManager = null
         adapter = null
         connectedProfiles.clear()
-        indicatorSamples.clear()
+        lastBatteryLevel.clear()
         logger.i(TAG, "Stopped")
     }
 
+    @Suppress("DiscouragedPrivateApi")
     private fun registerReceiver() {
         val filter = IntentFilter().apply {
-            addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
+            // ACL-level (cleanup tracked state when physical link drops)
             addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
             addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
+            // Profile-level (Music/Phone connect/disconnect per device)
+            addAction(ACTION_A2DP_CONNECTION_STATE_CHANGED)
+            addAction(ACTION_HFP_CONNECTION_STATE_CHANGED)
+            // Active device switches (which phone is active for audio/calls)
+            addAction(ACTION_A2DP_ACTIVE_DEVICE_CHANGED)
+            addAction(ACTION_HFP_ACTIVE_DEVICE_CHANGED)
         }
-        context.registerReceiver(receiver, filter)
+        // Service runs as singleUser (user 0), but BT broadcasts target the driver user.
+        // Use registerReceiverAsUser(ALL) to receive broadcasts from all users.
+        try {
+            val userAll = UserHandle::class.java.getField("ALL").get(null) as UserHandle
+            val method = context.javaClass.getMethod(
+                "registerReceiverAsUser",
+                BroadcastReceiver::class.java,
+                UserHandle::class.java,
+                IntentFilter::class.java,
+                String::class.java,
+                Handler::class.java,
+                Int::class.javaPrimitiveType,
+            )
+            method.invoke(
+                context,
+                receiver,
+                userAll,
+                filter,
+                null,
+                Handler(Looper.getMainLooper()),
+                Context.RECEIVER_EXPORTED,
+            )
+            logger.i(TAG, "Registered receiver for ALL users (context=${context.javaClass.name})")
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            // Fallback: try 5-parameter overload without flags
+            try {
+                val userAll = UserHandle::class.java.getField("ALL").get(null) as UserHandle
+                val fallback = context.javaClass.getMethod(
+                    "registerReceiverAsUser",
+                    BroadcastReceiver::class.java,
+                    UserHandle::class.java,
+                    IntentFilter::class.java,
+                    String::class.java,
+                    Handler::class.java,
+                )
+                fallback.invoke(context, receiver, userAll, filter, null, null)
+                logger.i(TAG, "Registered receiver for ALL users (5-param fallback)")
+            } catch (@Suppress("TooGenericExceptionCaught") e2: Exception) {
+                // Last resort: standard registration (only receives user 0 broadcasts)
+                context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+                logger.w(TAG, "Fell back to user-0-only receiver: ${e2.message}")
+            }
+        }
     }
 
     private fun openProfileProxies() {
@@ -204,24 +269,6 @@ class BluetoothCollector @Inject constructor(
         logger.d(TAG, "Startup snapshot: ${bondedDevices.size} bonded, ${connectedDevices.size} connected")
     }
 
-    private fun sendConnectionEvent(device: BluetoothDevice, event: String) {
-        telemetry.send(
-            TelemetryEvent(
-                signalId = signalId,
-                payload = mapOf(
-                    "actionName" to "Bluetooth_Connection",
-                    "trigger" to "system",
-                    "metadata" to mapOf(
-                        "event" to event,
-                        "address" to device.address,
-                        "name" to (device.name ?: "unknown"),
-                        "type" to deviceTypeString(device.type),
-                    ),
-                ),
-            ),
-        )
-    }
-
     private fun sendBondEvent(device: BluetoothDevice, state: Int) {
         val stateStr = when (state) {
             BluetoothDevice.BOND_BONDED -> "bonded"
@@ -245,43 +292,106 @@ class BluetoothCollector @Inject constructor(
         )
     }
 
-    private fun pollIndicators() {
-        // Read battery level from bonded connected devices (available via HFP metadata)
-        val bt = adapter ?: return
-        for (device in bt.bondedDevices ?: emptySet()) {
-            if (!isDeviceConnected(device)) continue
+    private fun handleProfileStateChange(intent: Intent, device: BluetoothDevice) {
+        val previousState = intent.getIntExtra(BluetoothProfile.EXTRA_PREVIOUS_STATE, -1)
+        val newState = intent.getIntExtra(BluetoothProfile.EXTRA_STATE, -1)
 
-            @Suppress("MagicNumber")
-            val batteryLevel = device.javaClass.getMethod("getBatteryLevel").invoke(device) as Int
-            val sample = listOf(
-                System.currentTimeMillis(),
-                device.address,
-                batteryLevel,
-            )
-            indicatorSamples.add(sample)
+        // Only emit when a profile actually connects or disconnects from a connected state.
+        // Skip connecting→disconnected transitions — the BT stack cycles through bonded
+        // devices trying to establish HFP, producing noise for devices that aren't nearby.
+        val isRealConnect = newState == BluetoothProfile.STATE_CONNECTED
+        val isRealDisconnect = previousState == BluetoothProfile.STATE_CONNECTED &&
+            newState == BluetoothProfile.STATE_DISCONNECTED
+        if (!isRealConnect && !isRealDisconnect) return
+
+        val profile = when (intent.action) {
+            ACTION_A2DP_CONNECTION_STATE_CHANGED -> "a2dp"
+            ACTION_HFP_CONNECTION_STATE_CHANGED -> "hfp"
+            else -> "unknown"
         }
-    }
-
-    private fun flushIndicators() {
-        if (indicatorSamples.isEmpty()) return
         telemetry.send(
             TelemetryEvent(
                 signalId = signalId,
                 payload = mapOf(
-                    "actionName" to "Bluetooth_DeviceIndicators",
-                    "trigger" to "heartbeat",
+                    "actionName" to "Bluetooth_ProfileState",
+                    "trigger" to "system",
                     "metadata" to mapOf(
-                        "sampleSchema" to listOf(
-                            "timestampMillis",
-                            "deviceAddress",
-                            "batteryLevel",
-                        ),
-                        "samples" to indicatorSamples.toList(),
+                        "address" to device.address,
+                        "name" to (device.name ?: "unknown"),
+                        "profile" to profile,
+                        "previousState" to profileStateString(previousState),
+                        "newState" to profileStateString(newState),
                     ),
                 ),
             ),
         )
-        indicatorSamples.clear()
+    }
+
+    private fun sendActiveDeviceChanged(device: BluetoothDevice?, profile: String) {
+        telemetry.send(
+            TelemetryEvent(
+                signalId = signalId,
+                payload = mapOf(
+                    "actionName" to "Bluetooth_ActiveDeviceChanged",
+                    "trigger" to "system",
+                    "metadata" to mapOf(
+                        "profile" to profile,
+                        "address" to (device?.address ?: "none"),
+                        "name" to (device?.name ?: "none"),
+                    ),
+                ),
+            ),
+        )
+    }
+
+    private fun profileStateString(state: Int): String = when (state) {
+        BluetoothProfile.STATE_DISCONNECTED -> "disconnected"
+        BluetoothProfile.STATE_CONNECTING -> "connecting"
+        BluetoothProfile.STATE_CONNECTED -> "connected"
+        BluetoothProfile.STATE_DISCONNECTING -> "disconnecting"
+        else -> "unknown"
+    }
+
+    private fun pollBatteryChanges() {
+        val bt = adapter ?: return
+        for (device in bt.bondedDevices ?: emptySet()) {
+            if (!isDeviceConnected(device)) continue
+
+            val batteryLevel = try {
+                @Suppress("MagicNumber")
+                device.javaClass.getMethod("getBatteryLevel").invoke(device) as Int
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                -1
+            }
+
+            val previous = lastBatteryLevel[device.address]
+            if (previous == batteryLevel) continue
+            lastBatteryLevel[device.address] = batteryLevel
+
+            telemetry.send(
+                TelemetryEvent(
+                    signalId = signalId,
+                    payload = mapOf(
+                        "actionName" to "Bluetooth_BatteryLevel",
+                        "trigger" to "onChange",
+                        "metadata" to mapOf(
+                            "address" to device.address,
+                            "name" to (device.name ?: "unknown"),
+                            "batteryLevel" to batteryLevel,
+                            "previousLevel" to (previous ?: "initial"),
+                        ),
+                    ),
+                ),
+            )
+            logger.d(TAG, "Battery changed: ${device.name} $previous → $batteryLevel")
+        }
+
+        // Clean up tracked devices that are no longer connected
+        val connectedAddresses = (bt.bondedDevices ?: emptySet())
+            .filter { isDeviceConnected(it) }
+            .map { it.address }
+            .toSet()
+        lastBatteryLevel.keys.retainAll(connectedAddresses)
     }
 
     private fun pollProfileChanges() {
@@ -320,6 +430,14 @@ class BluetoothCollector @Inject constructor(
     }
 
     private fun isDeviceConnected(device: BluetoothDevice): Boolean {
+        // Try hidden isConnected() method (works for classic BT)
+        val connected = try {
+            device.javaClass.getMethod("isConnected").invoke(device) as Boolean
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            false
+        }
+        if (connected) return true
+
         return profileProxies.values.any { proxy ->
             proxy.getConnectionState(device) == BluetoothProfile.STATE_CONNECTED
         }
@@ -335,14 +453,25 @@ class BluetoothCollector @Inject constructor(
     private fun profileName(profileId: Int): String = when (profileId) {
         BluetoothProfile.A2DP -> "a2dp"
         BluetoothProfile.HEADSET -> "hfp"
-        BluetoothProfile.HID_HOST -> "hid"
         else -> "profile_$profileId"
     }
 
     companion object {
         private const val TAG = "BluetoothCollector"
-        private const val SAMPLE_INTERVAL_MS = 5_000L
-        private const val SAMPLES_PER_BATCH = 12 // 12 × 5s = 60s flush
-        private const val STAGGER_DELAY_MS = 4_000L
+        private const val POLL_INTERVAL_MS = 30_000L
+        private const val POLLS_PER_PROFILE_CHECK = 2 // 2 × 30s = 60s profile poll
+        private const val PROXY_CONNECT_DELAY_MS = 6_000L
+
+        // Profile-level broadcast actions (fired when Music/Phone connects/disconnects per device)
+        private const val ACTION_A2DP_CONNECTION_STATE_CHANGED =
+            "android.bluetooth.a2dp.profile.action.CONNECTION_STATE_CHANGED"
+        private const val ACTION_HFP_CONNECTION_STATE_CHANGED =
+            "android.bluetooth.headsetclient.profile.action.CONNECTION_STATE_CHANGED"
+
+        // Active device switched (which phone is active for audio/calls)
+        private const val ACTION_A2DP_ACTIVE_DEVICE_CHANGED =
+            "android.bluetooth.a2dp.profile.action.ACTIVE_DEVICE_CHANGED"
+        private const val ACTION_HFP_ACTIVE_DEVICE_CHANGED =
+            "android.bluetooth.headsetclient.profile.action.ACTIVE_DEVICE_CHANGED"
     }
 }

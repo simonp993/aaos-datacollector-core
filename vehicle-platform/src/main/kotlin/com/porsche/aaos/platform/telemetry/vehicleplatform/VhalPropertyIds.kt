@@ -47,7 +47,7 @@ object VhalPropertyIds {
     val IGNITION_STATE: Int = VehiclePropertyIds.IGNITION_STATE
     val PARKING_BRAKE_ON: Int = VehiclePropertyIds.PARKING_BRAKE_ON
     val NIGHT_MODE: Int = VehiclePropertyIds.NIGHT_MODE
-    val VEHICLE_IN_USE: Int = VehiclePropertyIds.VEHICLE_IN_USE
+    val VEHICLE_IN_USE: Int = 0x11400A04
     val DOOR_LOCK: Int = VehiclePropertyIds.DOOR_LOCK
     val HEADLIGHTS_STATE: Int = VehiclePropertyIds.HEADLIGHTS_STATE
     val HIGH_BEAM_LIGHTS_STATE: Int = VehiclePropertyIds.HIGH_BEAM_LIGHTS_STATE
@@ -96,7 +96,7 @@ object VhalPropertyIds {
     // System / Power / Time
     val AP_POWER_STATE_REQ: Int = VehiclePropertyIds.AP_POWER_STATE_REQ
     val AP_POWER_STATE_REPORT: Int = VehiclePropertyIds.AP_POWER_STATE_REPORT
-    val EXTERNAL_CAR_TIME: Int = VehiclePropertyIds.EXTERNAL_CAR_TIME
+    val EXTERNAL_CAR_TIME: Int = 0x11600A09
     val VEHICLE_SPEED_DISPLAY_UNITS: Int = VehiclePropertyIds.VEHICLE_SPEED_DISPLAY_UNITS
     val DISTANCE_DISPLAY_UNITS: Int = VehiclePropertyIds.DISTANCE_DISPLAY_UNITS
     val VEHICLE_CURB_WEIGHT: Int = VehiclePropertyIds.VEHICLE_CURB_WEIGHT
