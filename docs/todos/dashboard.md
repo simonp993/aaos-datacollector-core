@@ -19,7 +19,6 @@ Last updated: 2026-05-11
 
 ## Features
 
-- [ ] Add Porsche logo
 - [ ] Add GPS analytics view
 - [ ] Add Navigation analytics view
 - [ ] Add Media analytics view
@@ -31,5 +30,6 @@ Last updated: 2026-05-11
 
 ## Styling
 
+- [ ] Add Porsche logo
 - [ ] Make the text and time bar color black
 - [ ] Make the displays dropdown fixed width
