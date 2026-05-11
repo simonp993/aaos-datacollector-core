@@ -1,13 +1,10 @@
 package com.porsche.aaos.platform.telemetry.collector.system
 
 import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
-import android.os.BatteryManager
 import com.porsche.aaos.platform.telemetry.collector.Collector
 import com.porsche.aaos.platform.telemetry.telemetry.Telemetry
 import com.porsche.aaos.platform.telemetry.telemetry.TelemetryEvent
@@ -37,12 +34,9 @@ class SensorBatteryCollector @Inject constructor(
     private val gyroSamples = mutableListOf<List<Any>>()
     private val lightSamples = mutableListOf<List<Any>>()
 
-    // Batched battery samples: [timestampMillis, level, charging, tempTenthsC, status]
-    private val batterySamples = mutableListOf<List<Any>>()
-
     override suspend fun start() {
         running = true
-        logger.i(TAG, "Starting sensor and battery monitoring (batched, ${SAMPLE_INTERVAL_MS * SAMPLES_PER_BATCH / 1000}s flush)")
+        logger.i(TAG, "Starting sensor monitoring (batched, ${SAMPLE_INTERVAL_MS * SAMPLES_PER_BATCH / 1000}s flush)")
 
         val sm = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
         sensorManager = sm
@@ -51,15 +45,13 @@ class SensorBatteryCollector @Inject constructor(
         registerSensor(sm, Sensor.TYPE_GYROSCOPE, "gyroscope")
         registerSensor(sm, Sensor.TYPE_LIGHT, "ambient_light")
 
-        // Poll battery every 5s, flush all batches every 60s
+        // Flush sensor batches every 60s
         delay(STAGGER_DELAY_MS) // Stagger to spread flush bursts
         var sampleCount = 0
         while (running && coroutineContext.isActive) {
-            collectBatterySample()
             sampleCount++
 
             if (sampleCount >= SAMPLES_PER_BATCH) {
-                flushBattery()
                 flushSensors()
                 sampleCount = 0
             }
@@ -109,46 +101,6 @@ class SensorBatteryCollector @Inject constructor(
         }
         sensorListeners.add(listener)
         sm.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
-    }
-
-    private fun collectBatterySample() {
-        val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        if (intent != null) {
-            val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
-            val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
-            val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
-            val temperature = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1)
-            val pct = if (scale > 0) (level * 100 / scale) else -1
-            val charging = status == BatteryManager.BATTERY_STATUS_CHARGING
-
-            batterySamples.add(
-                listOf(System.currentTimeMillis(), pct, charging, temperature, status),
-            )
-        }
-    }
-
-    private fun flushBattery() {
-        if (batterySamples.isEmpty()) return
-        telemetry.send(
-            TelemetryEvent(
-                signalId = signalId,
-                payload = mapOf(
-                    "actionName" to "Battery_Level",
-                    "trigger" to "heartbeat",
-                    "metadata" to mapOf(
-                        "sampleSchema" to listOf(
-                            "timestampMillis",
-                            "level",
-                            "charging",
-                            "temperatureTenthsC",
-                            "status",
-                        ),
-                        "samples" to batterySamples.toList(),
-                    ),
-                ),
-            ),
-        )
-        batterySamples.clear()
     }
 
     private fun flushSensors() {
