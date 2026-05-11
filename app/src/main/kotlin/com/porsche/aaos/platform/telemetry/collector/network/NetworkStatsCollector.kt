@@ -243,7 +243,7 @@ class NetworkStatsCollector @Inject constructor(
                 TelemetryEvent(
                     signalId = signalId,
                     payload = mapOf(
-                        "actionName" to "Network_TetheringTotal",
+                        "actionName" to "Network_VehicleHotspotTotal",
                         "trigger" to "heartbeat",
                         "metadata" to mapOf(
                             "rxBytes" to deltaRx,

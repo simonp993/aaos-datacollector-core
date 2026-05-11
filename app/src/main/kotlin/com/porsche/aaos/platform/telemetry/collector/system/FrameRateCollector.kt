@@ -33,7 +33,7 @@ import javax.inject.Inject
  * On production devices this works; on dev emulators it doesn't. The Choreographer approach
  * works universally and is sufficient for detecting smoothness drops.
  *
- * Payload (FrameRate_Current): emitted every 60s with 12 samples (5s each).
+ * Payload (Display_FrameRate): emitted every 60s with 12 samples (5s each).
  *   sampleSchema: [timestampMillis, frames, dropped, fps]
  *   - timestampMillis: Unix timestamp (milliseconds since 1970-01-01)
  *   - frames: vsync callbacks fired in the 5s window (target: 300 at 60Hz)
@@ -41,7 +41,8 @@ import javax.inject.Inject
  *   - fps: frames / 5.0 — effective frame rate
  *   Example: [1778082427000, 300, 0, 60.0] = "at that moment, 300 frames in 5s, 0 dropped, 60fps smooth"
  *
- * Event (Display_StateChanged): emitted instantly when any display turns ON or OFF.
+ * Note: Display on/off/standby detection is handled by DisplayStateCollector via RSI signals.
+ * Android's DisplayManager.STATE_* does not reflect Porsche-specific display modes.
  */
 class FrameRateCollector @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -55,8 +56,6 @@ class FrameRateCollector @Inject constructor(
     private var batchJob: Job? = null
     private var choreographerThread: HandlerThread? = null
     private var choreographer: Choreographer? = null
-    private var displayListener: DisplayManager.DisplayListener? = null
-    private var displayStates: MutableMap<Int, Int> = mutableMapOf()
 
     // Vsync timing tracking
     private val frameCount = AtomicInteger(0)
@@ -65,61 +64,14 @@ class FrameRateCollector @Inject constructor(
     private var expectedFramePeriodNanos = 16_666_666L // default 60Hz
 
     override suspend fun start() {
-        logger.i(TAG, "Starting frame rate monitoring (Choreographer + DisplayManager)")
+        logger.i(TAG, "Starting frame rate monitoring (Choreographer)")
 
         val displayManager = context.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
         val primaryDisplay = displayManager.getDisplay(Display.DEFAULT_DISPLAY)
         expectedFramePeriodNanos = (1_000_000_000.0 / primaryDisplay.refreshRate).toLong()
 
-        // Start handler thread for choreographer and display listener
         val thread = HandlerThread("FrameRateChoreographer").apply { start() }
         choreographerThread = thread
-
-        // Track initial display states
-        displayManager.displays.forEach { displayStates[it.displayId] = it.state }
-
-        // Listen for display state changes (on/off/standby)
-        val listener = object : DisplayManager.DisplayListener {
-            override fun onDisplayChanged(displayId: Int) {
-                val display = displayManager.getDisplay(displayId) ?: return
-                val newState = display.state
-                val prevState = displayStates[displayId]
-                if (prevState != null && prevState != newState) {
-                    val prevLabel = displayStateLabel(prevState)
-                    val newLabel = displayStateLabel(newState)
-                    if (prevLabel != newLabel) {
-                        telemetry.send(
-                            TelemetryEvent(
-                                signalId = signalId,
-                                payload = mapOf(
-                                    "actionName" to "Display_StateChanged",
-                                    "trigger" to "system",
-                                    "metadata" to mapOf(
-                                        "displayId" to displayId,
-                                        "display" to displayNameForId(displayId),
-                                        "previous" to prevLabel,
-                                        "state" to newLabel,
-                                    ),
-                                ),
-                            ),
-                        )
-                        logger.d(TAG, "Display $displayId (${displayNameForId(displayId)}): $prevLabel -> $newLabel")
-                    }
-                }
-                displayStates[displayId] = newState
-            }
-
-            override fun onDisplayAdded(displayId: Int) {
-                val display = displayManager.getDisplay(displayId) ?: return
-                displayStates[displayId] = display.state
-            }
-
-            override fun onDisplayRemoved(displayId: Int) {
-                displayStates.remove(displayId)
-            }
-        }
-        displayListener = listener
-        displayManager.registerDisplayListener(listener, Handler(thread.looper))
 
         Handler(thread.looper).post {
             choreographer = Choreographer.getInstance()
@@ -165,11 +117,6 @@ class FrameRateCollector @Inject constructor(
     override fun stop() {
         batchJob?.cancel()
         batchJob = null
-        displayListener?.let {
-            val dm = context.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
-            dm.unregisterDisplayListener(it)
-        }
-        displayListener = null
         choreographerThread?.quitSafely()
         choreographerThread = null
         choreographer = null
@@ -197,23 +144,5 @@ class FrameRateCollector @Inject constructor(
         private const val SAMPLE_INTERVAL_MS = 5_000L
         private const val SAMPLES_PER_BATCH = 12
         private const val STAGGER_DELAY_MS = 8_000L
-
-        // MIB4 Cayenne display ID mapping (from dumpsys display: DSI_1/2/3 ports 129/130/131)
-        // Display 0 = center (1920x720), Display 2 = cluster (1920x1080), Display 3 = passenger (1920x720)
-        private fun displayNameForId(displayId: Int): String = when (displayId) {
-            0 -> "center"
-            2 -> "cluster"
-            3 -> "passenger"
-            else -> "display_$displayId"
-        }
-
-        private fun displayStateLabel(state: Int): String = when (state) {
-            Display.STATE_OFF -> "OFF"
-            Display.STATE_ON -> "ON"
-            Display.STATE_DOZE -> "STANDBY"
-            Display.STATE_DOZE_SUSPEND -> "STANDBY"
-            Display.STATE_ON_SUSPEND -> "STANDBY"
-            else -> "UNKNOWN"
-        }
     }
 }

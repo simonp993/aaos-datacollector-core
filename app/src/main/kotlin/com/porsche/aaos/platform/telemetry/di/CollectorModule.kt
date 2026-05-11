@@ -8,6 +8,7 @@ import com.porsche.aaos.platform.telemetry.collector.system.AssistantCollector
 import com.porsche.aaos.platform.telemetry.collector.system.AudioCollector
 import com.porsche.aaos.platform.telemetry.collector.system.BluetoothCollector
 import com.porsche.aaos.platform.telemetry.collector.system.ConnectivityCollector
+import com.porsche.aaos.platform.telemetry.collector.system.DisplayStateCollector
 import com.porsche.aaos.platform.telemetry.collector.system.CpuCollector
 import com.porsche.aaos.platform.telemetry.collector.system.FrameRateCollector
 import com.porsche.aaos.platform.telemetry.collector.system.LocationCollector
@@ -130,4 +131,8 @@ abstract class CollectorModule {
     @Binds
     @IntoSet
     abstract fun bindBluetoothCollector(impl: BluetoothCollector): Collector
+
+    @Binds
+    @IntoSet
+    abstract fun bindDisplayStateCollector(impl: DisplayStateCollector): Collector
 }
