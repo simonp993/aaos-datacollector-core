@@ -22,6 +22,8 @@ Before Weekend Drive
 
 - VHAL Changes
 
+- Standby mode not correctly gotten, but it is possible. 
+
 During weekend drive
 - Test Tethering separation in real car: It's NOT definitively impossible on a real car with cellular. The BPF forwarding stats (mBpfStatsMap) in dumpsys tethering are only populated when traffic is actually being forwarded through an upstream. On your WiFi-only car, there's no NAT forwarding to measure (clients on the hotspot are local-only or go through WiFi which merges). On a car with cellular as upstream, the BPF tethering offload should populate those forwarding counters — they'd represent exactly the internet-forwarded portion. I updated the comment to be more nuanced about this. Also, READ_NETWORK_USAGE_HISTORY + platform signature might allow calling the hidden NetworkStatsManager.querySummaryForDevice() with the tethering interface type. This is worth revisiting once you have a cellular-equipped car to test on.
 
@@ -69,6 +71,7 @@ After Weekend Drive
 - [ ] Kombi warnings — instrument cluster warning display state (BEM warnings?).
 - [ ] App startup times (G13) — time-to-first-frame per app. Blocked — discuss with Mathieu.
 - [ ] System properties collector (`getprop`) — snapshot key ro.* and persist.* properties at boot (Android version, build fingerprint, boot reason, AAOS extensions version). One-shot at startup + on-demand.
+clean up documentation
 
 
 
