@@ -9,11 +9,6 @@ Last updated: 2026-05-11
 ## 1. Broken Collectors new features (emitting nothing / wrong data)
 
 Before Weekend Drive
--when touching with >=two fingers: it is Touch_PointerDown and not Touch_Down / Up, this must be a bug. Touch_PointerDown is old signal
-
-- The car has only center display and passenger screen, no rear screen, why is it showing a rear screen but no passenger
-also, lets fix/add Display on/off action — detect and emit when displays are turned on/off/standby for ALL displays (center, cluster, passenger, rear). Standby state (e.g. music cover) should be distinct from OFF. I can turn the displays to standby and off when you say it
-
 - make sure operatorName in SignalStrenght cellular contains a string an not only ""
 
 - [ ] CarWatchdogManager collector — monitor system health: unresponsive services, resource overuse notifications, I/O overuse stats. Guaranteed API.
@@ -25,6 +20,10 @@ also, lets fix/add Display on/off action — detect and emit when displays are t
 - [ ] Location provider collector — `adb shell dumpsys location` shows which packages are registered for location updates, provider, interval. Proves causal links (e.g. Mapbox → FLP). Collect periodically or on-demand.
 
 -  Is the bluetooth connection also collecting for other users but 14? so would 10, 11, 12, or so work out of the box 
+
+
+During weekend drive
+- Test Tethering separation in real car: It's NOT definitively impossible on a real car with cellular. The BPF forwarding stats (mBpfStatsMap) in dumpsys tethering are only populated when traffic is actually being forwarded through an upstream. On your WiFi-only car, there's no NAT forwarding to measure (clients on the hotspot are local-only or go through WiFi which merges). On a car with cellular as upstream, the BPF tethering offload should populate those forwarding counters — they'd represent exactly the internet-forwarded portion. I updated the comment to be more nuanced about this. Also, READ_NETWORK_USAGE_HISTORY + platform signature might allow calling the hidden NetworkStatsManager.querySummaryForDevice() with the tethering interface type. This is worth revisiting once you have a cellular-equipped car to test on.
 
 
 After weekend drive

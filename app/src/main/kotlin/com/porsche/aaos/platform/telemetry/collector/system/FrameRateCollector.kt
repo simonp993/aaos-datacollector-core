@@ -78,16 +78,16 @@ class FrameRateCollector @Inject constructor(
         // Track initial display states
         displayManager.displays.forEach { displayStates[it.displayId] = it.state }
 
-        // Listen for display state changes (on/off)
+        // Listen for display state changes (on/off/standby)
         val listener = object : DisplayManager.DisplayListener {
             override fun onDisplayChanged(displayId: Int) {
                 val display = displayManager.getDisplay(displayId) ?: return
                 val newState = display.state
                 val prevState = displayStates[displayId]
                 if (prevState != null && prevState != newState) {
-                    val isOn = newState == Display.STATE_ON
-                    val wasOn = prevState == Display.STATE_ON
-                    if (isOn != wasOn) {
+                    val prevLabel = displayStateLabel(prevState)
+                    val newLabel = displayStateLabel(newState)
+                    if (prevLabel != newLabel) {
                         telemetry.send(
                             TelemetryEvent(
                                 signalId = signalId,
@@ -96,12 +96,14 @@ class FrameRateCollector @Inject constructor(
                                     "trigger" to "system",
                                     "metadata" to mapOf(
                                         "displayId" to displayId,
-                                        "state" to if (isOn) "ON" else "OFF",
+                                        "display" to displayNameForId(displayId),
+                                        "previous" to prevLabel,
+                                        "state" to newLabel,
                                     ),
                                 ),
                             ),
                         )
-                        logger.d(TAG, "Display $displayId state: ${displayStateLabel(prevState)} -> ${displayStateLabel(newState)}")
+                        logger.d(TAG, "Display $displayId (${displayNameForId(displayId)}): $prevLabel -> $newLabel")
                     }
                 }
                 displayStates[displayId] = newState
@@ -196,13 +198,22 @@ class FrameRateCollector @Inject constructor(
         private const val SAMPLES_PER_BATCH = 12
         private const val STAGGER_DELAY_MS = 8_000L
 
+        // MIB4 Cayenne display ID mapping (from dumpsys display: DSI_1/2/3 ports 129/130/131)
+        // Display 0 = center (1920x720), Display 2 = cluster (1920x1080), Display 3 = passenger (1920x720)
+        private fun displayNameForId(displayId: Int): String = when (displayId) {
+            0 -> "center"
+            2 -> "cluster"
+            3 -> "passenger"
+            else -> "display_$displayId"
+        }
+
         private fun displayStateLabel(state: Int): String = when (state) {
             Display.STATE_OFF -> "OFF"
             Display.STATE_ON -> "ON"
-            Display.STATE_DOZE -> "DOZE"
-            Display.STATE_DOZE_SUSPEND -> "DOZE_SUSPEND"
-            Display.STATE_ON_SUSPEND -> "ON_SUSPEND"
-            else -> "UNKNOWN($state)"
+            Display.STATE_DOZE -> "STANDBY"
+            Display.STATE_DOZE_SUSPEND -> "STANDBY"
+            Display.STATE_ON_SUSPEND -> "STANDBY"
+            else -> "UNKNOWN"
         }
     }
 }

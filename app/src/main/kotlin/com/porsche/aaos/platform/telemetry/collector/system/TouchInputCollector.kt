@@ -153,6 +153,7 @@ class TouchInputCollector @Inject constructor(
         private var gestureStartY = 0f
         private var gestureStartTime = 0L
         private var moveCount = 0
+        private var maxPointerCount = 0
         private var inGesture = false
 
         override fun onInputEvent(event: InputEvent) {
@@ -166,12 +167,18 @@ class TouchInputCollector @Inject constructor(
         }
 
         private fun handleMotionEvent(event: MotionEvent) {
+            // Track max finger count across the entire gesture
+            if (event.pointerCount > maxPointerCount) {
+                maxPointerCount = event.pointerCount
+            }
+
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     gestureStartX = event.x
                     gestureStartY = event.y
                     gestureStartTime = event.eventTime
                     moveCount = 0
+                    maxPointerCount = event.pointerCount
                     inGesture = true
                     sendTouchEvent("Touch_Down", event)
                 }
@@ -192,11 +199,10 @@ class TouchInputCollector @Inject constructor(
                     sendTouchEvent("Touch_Cancel", event)
                     inGesture = false
                 }
-                MotionEvent.ACTION_POINTER_DOWN -> {
-                    sendTouchEvent("Touch_PointerDown", event)
-                }
-                MotionEvent.ACTION_POINTER_UP -> {
-                    sendTouchEvent("Touch_PointerUp", event)
+                MotionEvent.ACTION_POINTER_DOWN,
+                MotionEvent.ACTION_POINTER_UP,
+                -> {
+                    // No separate event — maxPointerCount captures multi-finger info
                 }
             }
         }
@@ -213,7 +219,7 @@ class TouchInputCollector @Inject constructor(
                             "displayId" to displayId,
                             "x" to event.x,
                             "y" to event.y,
-                            "pointerCount" to event.pointerCount,
+                            "pointerCount" to maxPointerCount,
                         ),
                     ),
                 ),
@@ -237,7 +243,7 @@ class TouchInputCollector @Inject constructor(
                             "endY" to endEvent.y,
                             "durationMs" to durationMs,
                             "moveCount" to moveCount,
-                            "pointerCount" to endEvent.pointerCount,
+                            "pointerCount" to maxPointerCount,
                         ),
                     ),
                 ),

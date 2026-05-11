@@ -211,6 +211,17 @@ class NetworkStatsCollector @Inject constructor(
      * Emits tethering traffic stats: total bytes through the hotspot interface(s) and
      * the number of currently connected clients.
      *
+     * NOTE: rxBytes/txBytes represent ALL traffic on the AP interfaces — this includes both
+     * local traffic (CarPlay, Android Auto, AirPlay) and internet-forwarded traffic. Android
+     * does not expose a way to separate these:
+     * - BPF tethering stats (mBpfStatsMap) are only populated when forwarding is active and
+     *   are not accessible from userspace without root/bpf filesystem.
+     * - iptables tether counters are not present on AAOS 15.
+     * - /proc/net/dev on the upstream interface mixes the car's own traffic with forwarded.
+     * - xt_qtaguid was removed in Android 15.
+     * Therefore, to determine "cellular consumed by tethered devices" one would need to
+     * subtract the car's own cellular usage from total cellular at analysis time.
+     *
      * Data sources:
      * - `dumpsys tethering` → identifies active tethering interfaces (TetheredState)
      * - `/proc/net/dev` → cumulative rx/tx byte counters per interface
@@ -225,7 +236,7 @@ class NetworkStatsCollector @Inject constructor(
             previousTetheringRx = current.first
             previousTetheringTx = current.second
 
-            val interfaces = getTetheringInterfaces()
+            val interfaces = parseTetheringDumpsys().interfaces
             val clients = countTetheringClients(interfaces)
 
             telemetry.send(
@@ -238,7 +249,6 @@ class NetworkStatsCollector @Inject constructor(
                             "rxBytes" to deltaRx,
                             "txBytes" to deltaTx,
                             "connectedClients" to clients,
-                            "interfaces" to interfaces,
                         ),
                     ),
                 ),
@@ -248,20 +258,40 @@ class NetworkStatsCollector @Inject constructor(
         }
     }
 
+    private data class TetheringInfo(
+        val interfaces: List<String>,
+        val upstream: String,
+        val upstreamType: String,
+    )
+
     /**
-     * Discovers active tethering interfaces from `dumpsys tethering`.
-     * Looks for interfaces in "TetheredState" or "LocalHotspotState".
+     * Parses `dumpsys tethering` to discover:
+     * - Active tethering interfaces (TetheredState / LocalHotspotState)
+     * - Current upstream interface (where tethered traffic exits)
      */
     @Suppress("TooGenericExceptionCaught")
-    private fun getTetheringInterfaces(): List<String> {
+    private fun parseTetheringDumpsys(): TetheringInfo {
         return try {
             val process = Runtime.getRuntime().exec(arrayOf("dumpsys", "tethering"))
             val output = process.inputStream.bufferedReader().readText()
             process.waitFor()
-            TETHER_IFACE_PATTERN.findAll(output).map { it.groupValues[1] }.toList()
+
+            val interfaces = TETHER_IFACE_PATTERN.findAll(output)
+                .map { it.groupValues[1] }.toList()
+
+            val upstream = UPSTREAM_PATTERN.find(output)?.groupValues?.get(1) ?: "none"
+            val upstreamType = when {
+                upstream.startsWith("rmnet") -> "cellular"
+                upstream.startsWith("wlan") -> "wifi"
+                upstream.startsWith("eth") -> "ethernet"
+                upstream == "none" -> "none"
+                else -> "other"
+            }
+
+            TetheringInfo(interfaces, upstream, upstreamType)
         } catch (e: Exception) {
-            logger.d(TAG, "Failed to read tethering interfaces: ${e.message}")
-            emptyList()
+            logger.d(TAG, "Failed to parse tethering dumpsys: ${e.message}")
+            TetheringInfo(emptyList(), "unknown", "unknown")
         }
     }
 
@@ -271,7 +301,7 @@ class NetworkStatsCollector @Inject constructor(
      */
     @Suppress("TooGenericExceptionCaught")
     private fun readTetheringInterfaceBytes(): Pair<Long, Long> {
-        val interfaces = getTetheringInterfaces()
+        val interfaces = parseTetheringDumpsys().interfaces
         if (interfaces.isEmpty()) return 0L to 0L
         return try {
             val process = Runtime.getRuntime().exec(arrayOf("cat", "/proc/net/dev"))
@@ -502,6 +532,8 @@ class NetworkStatsCollector @Inject constructor(
         private val NET_TYPE_PATTERN = Regex("""type=(\d+)""")
         private val TETHER_IFACE_PATTERN =
             Regex("""^\s+(\S+)\s+-\s+(?:TetheredState|LocalHotspotState)""", RegexOption.MULTILINE)
+        private val UPSTREAM_PATTERN =
+            Regex("""Current upstream interface\(s\):\s*\[(\S+?)]""")
         private val MAC_PATTERN =
             Regex("""lladdr\s+([0-9a-fA-F:]{17})""")
 
