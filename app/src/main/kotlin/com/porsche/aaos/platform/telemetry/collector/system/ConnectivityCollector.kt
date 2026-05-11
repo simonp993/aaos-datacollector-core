@@ -6,6 +6,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.wifi.WifiManager
+import android.telephony.TelephonyManager
 import com.porsche.aaos.platform.telemetry.collector.Collector
 import com.porsche.aaos.platform.telemetry.core.logging.Logger
 import com.porsche.aaos.platform.telemetry.telemetry.Telemetry
@@ -29,6 +30,7 @@ class ConnectivityCollector @Inject constructor(
     private var running = false
     private var connectivityManager: ConnectivityManager? = null
     private var wifiManager: WifiManager? = null
+    private var telephonyManager: TelephonyManager? = null
 
     // Active networks tracked via callbacks
     private val activeNetworks = mutableSetOf<Network>()
@@ -79,6 +81,7 @@ class ConnectivityCollector @Inject constructor(
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         connectivityManager = cm
         wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
 
         val request = NetworkRequest.Builder().build()
         cm.registerNetworkCallback(request, networkCallback)
@@ -105,6 +108,7 @@ class ConnectivityCollector @Inject constructor(
         connectivityManager?.unregisterNetworkCallback(networkCallback)
         connectivityManager = null
         wifiManager = null
+        telephonyManager = null
         activeNetworks.clear()
         samplesByTransport.clear()
         logger.i(TAG, "Stopped")
@@ -112,6 +116,7 @@ class ConnectivityCollector @Inject constructor(
 
     private fun pollActiveNetworks() {
         val cm = connectivityManager ?: return
+        val operatorName = telephonyManager?.networkOperatorName.orEmpty()
         for (network in activeNetworks.toList()) {
             val caps = cm.getNetworkCapabilities(network) ?: continue
             val transport = resolveTransport(caps)
@@ -120,6 +125,7 @@ class ConnectivityCollector @Inject constructor(
                 caps.signalStrength,
                 caps.linkDownstreamBandwidthKbps,
                 caps.linkUpstreamBandwidthKbps,
+                operatorName,
             )
             samplesByTransport.getOrPut(transport) { mutableListOf() }.add(sample)
         }
@@ -144,6 +150,7 @@ class ConnectivityCollector @Inject constructor(
                                 "signalStrengthDbm",
                                 "maxDownstreamBandwidthKbps",
                                 "maxUpstreamBandwidthKbps",
+                                "operatorName",
                             ),
                             "samples" to samples.toList(),
                         ),

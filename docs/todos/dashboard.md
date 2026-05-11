@@ -11,8 +11,11 @@ Last updated: 2026-05-11
 - [ ] Hover of "App lifecycle vs network traffic" shows only "Trace xy" — not the screen/app name
 - [ ] Timeline zoom gap bug — when zooming into the gap between session 3 and 4, foreground apps show no data even before session 3 ended. But zooming in the foreground app graph directly shows data where the timeline-filtered view shows none.
 - [ ] Touch count on hover is wrong — shows 24 but one click should be 1 (or values are always multiples of 12, suggesting double/triple counting). Likely counting raw MotionEvent samples instead of logical taps.
+![alt text](image.png)
 - [ ] Touch events appearing for Instrument Cluster (IC) — IC is not a touchscreen, these events should not exist
+![alt text](image-1.png)
 - [ ] App change vs touches alignment still wrong — bars don't match the actual foreground app at that timestamp
+![alt text](image-2.png)
 - [ ] Displays dropdown is not fixed size — jumps around based on content
 
 ---

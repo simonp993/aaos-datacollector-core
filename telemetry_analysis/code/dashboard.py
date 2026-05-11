@@ -48,19 +48,38 @@ DISPLAY_RESOLUTIONS = {
 
 TOUCH_EXCLUDED_DISPLAYS = {1}
 
+# ── Porsche Design System Tokens (Light Theme) ──────────────────────────────
+# Font: Porsche Next via CDN | Colors: PDS light-theme palette
+PDS_FONT_CDN = "https://cdn.ui.porsche.com/porsche-design-system/style/v4/font-face.min.css"
+PDS_CREST_URL = "https://cdn.ui.porsche.com/porsche-design-system/crest/porsche-crest.2245c45@2x.webp"
+PDS_FONT_FAMILY = "'Porsche Next', 'Arial Narrow', Arial, 'Heiti SC', SimHei, sans-serif"
+
+# PDS Colors (light theme)
+PDS_PRIMARY = "#000000"          # foreground / text
+PDS_BACKGROUND = "#FFFFFF"       # page surface
+PDS_BACKGROUND_SURFACE = "#F2F2F2"  # card / elevated surface
+PDS_BACKGROUND_FROSTED = "#EEEFF2"  # subtle secondary surface
+PDS_BRAND = "#D5001C"            # Porsche red (accent)
+PDS_CONTRAST_LOW = "#535353"     # secondary text
+PDS_CONTRAST_MEDIUM = "#323232" # labels
+PDS_BORDER = "#C9CACB"          # borders / dividers
+PDS_STATE_SUCCESS = "#018A16"
+PDS_STATE_WARNING = "#FF9B00"
+PDS_STATE_ERROR = "#E00000"
+
 PLOT_TEMPLATE = "plotly_white"
 CARD_STYLE = {
-    "backgroundColor": "#ffffff",
-    "borderRadius": "8px",
+    "backgroundColor": PDS_BACKGROUND,
+    "borderRadius": "4px",
     "padding": "16px 24px",
     "textAlign": "center",
     "minWidth": "150px",
     "flex": "1",
-    "boxShadow": "0 1px 3px rgba(0,0,0,0.1)",
-    "border": "1px solid #e8e8e8",
+    "boxShadow": "0 2px 4px rgba(0,0,0,0.06)",
+    "border": f"1px solid {PDS_BORDER}",
 }
-CARD_VALUE_STYLE = {"color": "#0f9b8e", "fontSize": "28px", "fontWeight": "bold", "margin": "0"}
-CARD_LABEL_STYLE = {"color": "#444", "fontSize": "12px", "margin": "4px 0 0 0"}
+CARD_VALUE_STYLE = {"color": PDS_PRIMARY, "fontSize": "28px", "fontWeight": "700", "margin": "0"}
+CARD_LABEL_STYLE = {"color": PDS_CONTRAST_LOW, "fontSize": "12px", "margin": "4px 0 0 0"}
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +250,7 @@ def _build_range_selector_fig():
             x=[s_dt + (e_dt - s_dt) / 2],
             y=[1],
             width=[(e_dt - s_dt).total_seconds() * 1000],
-            marker_color="#0f9b8e",
+            marker_color=PDS_BRAND,
             opacity=0.6,
             showlegend=False,
             hoverinfo="text",
@@ -262,9 +281,9 @@ def _build_range_selector_fig():
 # ---------------------------------------------------------------------------
 
 app = Dash(__name__, suppress_callback_exceptions=True)
-app.title = "AAOS Telemetry Dashboard"
+app.title = "Porsche AAOS Telemetry"
 
-# Override Dash slider accent color via index_string
+# Porsche Design System styling via index_string
 app.index_string = '''<!DOCTYPE html>
 <html>
 <head>
@@ -272,11 +291,17 @@ app.index_string = '''<!DOCTYPE html>
 <title>{%title%}</title>
 {%favicon%}
 {%css%}
+<link rel="stylesheet" href="''' + PDS_FONT_CDN + '''">
 <style>
-.rc-slider-track { background-color: #0f9b8e !important; }
-.rc-slider-handle { border-color: #0f9b8e !important; }
-.rc-slider-handle:hover, .rc-slider-handle:active { border-color: #0d8a7e !important; box-shadow: 0 0 5px #0f9b8e !important; }
-.rc-slider-dot-active { border-color: #0f9b8e !important; }
+body { font-family: ''' + PDS_FONT_FAMILY + '''; }
+.rc-slider-track { background-color: #D5001C !important; }
+.rc-slider-handle { border-color: #D5001C !important; }
+.rc-slider-handle:hover, .rc-slider-handle:active { border-color: #a50016 !important; box-shadow: 0 0 5px rgba(213,0,28,0.3) !important; }
+.rc-slider-dot-active { border-color: #D5001C !important; }
+.Select-control, .Select-menu-outer { font-family: ''' + PDS_FONT_FAMILY + '''; }
+.dash-dropdown .Select-control { border-color: #C9CACB !important; border-radius: 4px !important; }
+.dash-dropdown .Select-control:hover { border-color: #000 !important; }
+.tab--selected { border-color: #D5001C !important; color: #000 !important; font-weight: 600 !important; }
 </style>
 </head>
 <body>
@@ -290,25 +315,39 @@ app.index_string = '''<!DOCTYPE html>
 </html>'''
 
 app.layout = html.Div(
-    style={"backgroundColor": "#f5f6fa", "minHeight": "100vh", "padding": "20px 30px",
-           "fontFamily": "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif", "color": "#111"},
+    style={"backgroundColor": PDS_BACKGROUND_SURFACE, "minHeight": "100vh", "padding": "20px 30px",
+           "fontFamily": PDS_FONT_FAMILY, "color": PDS_PRIMARY},
     children=[
-        # Header
+        # Header — Porsche crest + wordmark
         html.Div(
             style={"display": "flex", "alignItems": "center", "justifyContent": "space-between",
-                   "marginBottom": "20px"},
+                   "marginBottom": "20px", "paddingBottom": "16px",
+                   "borderBottom": f"1px solid {PDS_BORDER}"},
             children=[
-                html.H1("AAOS Telemetry Dashboard",
-                         style={"color": "#0f9b8e", "fontSize": "24px", "margin": 0}),
+                html.Div(
+                    style={"display": "flex", "alignItems": "center", "gap": "12px"},
+                    children=[
+                        html.Img(src=PDS_CREST_URL, style={"height": "40px", "width": "auto"}),
+                        html.Div([
+                            html.Span("PORSCHE",
+                                      style={"fontSize": "11px", "letterSpacing": "2px",
+                                             "fontWeight": "600", "color": PDS_PRIMARY,
+                                             "display": "block"}),
+                            html.Span("AAOS Telemetry",
+                                      style={"fontSize": "18px", "fontWeight": "700",
+                                             "color": PDS_PRIMARY, "lineHeight": "1.2"}),
+                        ]),
+                    ],
+                ),
                 html.Span(f"Data: {MIN_DT.strftime('%Y-%m-%d %H:%M')} — {MAX_DT.strftime('%H:%M')}",
-                           style={"color": "#888", "fontSize": "13px"}),
+                           style={"color": PDS_CONTRAST_LOW, "fontSize": "13px"}),
             ],
         ),
 
         # Filters area
         html.Div(
-            style={"marginBottom": "24px", "backgroundColor": "#ffffff", "padding": "16px 20px",
-                   "borderRadius": "8px", "boxShadow": "0 1px 3px rgba(0,0,0,0.08)"},
+            style={"marginBottom": "24px", "backgroundColor": PDS_BACKGROUND, "padding": "16px 20px",
+                   "borderRadius": "4px", "border": f"1px solid {PDS_BORDER}"},
             children=[
                 # Row 1: Data range label
                 html.Div(
@@ -317,11 +356,11 @@ app.layout = html.Div(
                     children=[
                         html.Span(
                             f"Data: {MIN_DT.strftime('%Y-%m-%d %H:%M')} — {MAX_DT.strftime('%H:%M')}",
-                            style={"fontSize": "13px", "color": "#555", "fontWeight": "500"},
+                            style={"fontSize": "13px", "color": PDS_CONTRAST_LOW, "fontWeight": "600"},
                         ),
                         html.Span(
                             id="time-range-label",
-                            style={"fontSize": "12px", "color": "#0f9b8e", "marginLeft": "auto"},
+                            style={"fontSize": "12px", "color": PDS_CONTRAST_MEDIUM, "marginLeft": "auto"},
                         ),
                     ],
                 ),
@@ -339,7 +378,7 @@ app.layout = html.Div(
                     style={"display": "flex", "gap": "16px", "alignItems": "flex-end", "flexWrap": "wrap"},
                     children=[
                         html.Div([
-                            html.Label("Displays", style={"fontSize": "11px", "color": "#888",
+                            html.Label("Displays", style={"fontSize": "11px", "color": PDS_CONTRAST_LOW,
                                                            "display": "block", "marginBottom": "4px"}),
                             dcc.Dropdown(
                                 id="display-filter",
@@ -350,7 +389,7 @@ app.layout = html.Div(
                             ),
                         ]),
                         html.Div([
-                            html.Label("Apps", style={"fontSize": "11px", "color": "#888",
+                            html.Label("Apps", style={"fontSize": "11px", "color": PDS_CONTRAST_LOW,
                                                        "display": "block", "marginBottom": "4px"}),
                             dcc.Dropdown(
                                 id="app-filter",
@@ -360,7 +399,7 @@ app.layout = html.Div(
                             ),
                         ]),
                         html.Div([
-                            html.Label("Trigger", style={"fontSize": "11px", "color": "#888",
+                            html.Label("Trigger", style={"fontSize": "11px", "color": PDS_CONTRAST_LOW,
                                                           "display": "block", "marginBottom": "4px"}),
                             dcc.Dropdown(
                                 id="trigger-filter",
@@ -380,30 +419,30 @@ app.layout = html.Div(
         # Tabs
         dcc.Tabs(
             id="section-tabs", value="timeline",
-            colors={"border": "#e8e8e8", "primary": "#0f9b8e", "background": "#ffffff"},
+            colors={"border": PDS_BORDER, "primary": PDS_BRAND, "background": PDS_BACKGROUND},
             style={"marginBottom": "20px"},
             children=[
                 dcc.Tab(label="Timeline", value="timeline",
-                        style={"backgroundColor": "#fff", "color": "#888", "padding": "8px 16px", "border": "1px solid #e8e8e8"},
-                        selected_style={"backgroundColor": "#0f9b8e", "color": "#fff", "padding": "8px 16px"}),
+                        style={"backgroundColor": PDS_BACKGROUND, "color": PDS_CONTRAST_LOW, "padding": "8px 16px", "border": f"1px solid {PDS_BORDER}"},
+                        selected_style={"backgroundColor": PDS_BACKGROUND, "color": PDS_PRIMARY, "padding": "8px 16px", "borderBottom": f"2px solid {PDS_BRAND}", "fontWeight": "600"}),
                 dcc.Tab(label="App Usage", value="app_usage",
-                        style={"backgroundColor": "#fff", "color": "#888", "padding": "8px 16px", "border": "1px solid #e8e8e8"},
-                        selected_style={"backgroundColor": "#0f9b8e", "color": "#fff", "padding": "8px 16px"}),
+                        style={"backgroundColor": PDS_BACKGROUND, "color": PDS_CONTRAST_LOW, "padding": "8px 16px", "border": f"1px solid {PDS_BORDER}"},
+                        selected_style={"backgroundColor": PDS_BACKGROUND, "color": PDS_PRIMARY, "padding": "8px 16px", "borderBottom": f"2px solid {PDS_BRAND}", "fontWeight": "600"}),
                 dcc.Tab(label="Touch", value="touch",
-                        style={"backgroundColor": "#fff", "color": "#888", "padding": "8px 16px", "border": "1px solid #e8e8e8"},
-                        selected_style={"backgroundColor": "#0f9b8e", "color": "#fff", "padding": "8px 16px"}),
+                        style={"backgroundColor": PDS_BACKGROUND, "color": PDS_CONTRAST_LOW, "padding": "8px 16px", "border": f"1px solid {PDS_BORDER}"},
+                        selected_style={"backgroundColor": PDS_BACKGROUND, "color": PDS_PRIMARY, "padding": "8px 16px", "borderBottom": f"2px solid {PDS_BRAND}", "fontWeight": "600"}),
                 dcc.Tab(label="Performance", value="performance",
-                        style={"backgroundColor": "#fff", "color": "#888", "padding": "8px 16px", "border": "1px solid #e8e8e8"},
-                        selected_style={"backgroundColor": "#0f9b8e", "color": "#fff", "padding": "8px 16px"}),
+                        style={"backgroundColor": PDS_BACKGROUND, "color": PDS_CONTRAST_LOW, "padding": "8px 16px", "border": f"1px solid {PDS_BORDER}"},
+                        selected_style={"backgroundColor": PDS_BACKGROUND, "color": PDS_PRIMARY, "padding": "8px 16px", "borderBottom": f"2px solid {PDS_BRAND}", "fontWeight": "600"}),
                 dcc.Tab(label="Network", value="network",
-                        style={"backgroundColor": "#fff", "color": "#888", "padding": "8px 16px", "border": "1px solid #e8e8e8"},
-                        selected_style={"backgroundColor": "#0f9b8e", "color": "#fff", "padding": "8px 16px"}),
+                        style={"backgroundColor": PDS_BACKGROUND, "color": PDS_CONTRAST_LOW, "padding": "8px 16px", "border": f"1px solid {PDS_BORDER}"},
+                        selected_style={"backgroundColor": PDS_BACKGROUND, "color": PDS_PRIMARY, "padding": "8px 16px", "borderBottom": f"2px solid {PDS_BRAND}", "fontWeight": "600"}),
                 dcc.Tab(label="Vehicle & GPS", value="vehicle",
-                        style={"backgroundColor": "#fff", "color": "#888", "padding": "8px 16px", "border": "1px solid #e8e8e8"},
-                        selected_style={"backgroundColor": "#0f9b8e", "color": "#fff", "padding": "8px 16px"}),
+                        style={"backgroundColor": PDS_BACKGROUND, "color": PDS_CONTRAST_LOW, "padding": "8px 16px", "border": f"1px solid {PDS_BORDER}"},
+                        selected_style={"backgroundColor": PDS_BACKGROUND, "color": PDS_PRIMARY, "padding": "8px 16px", "borderBottom": f"2px solid {PDS_BRAND}", "fontWeight": "600"}),
                 dcc.Tab(label="Collector Stats", value="overview",
-                        style={"backgroundColor": "#fff", "color": "#888", "padding": "8px 16px", "border": "1px solid #e8e8e8"},
-                        selected_style={"backgroundColor": "#0f9b8e", "color": "#fff", "padding": "8px 16px"}),
+                        style={"backgroundColor": PDS_BACKGROUND, "color": PDS_CONTRAST_LOW, "padding": "8px 16px", "border": f"1px solid {PDS_BORDER}"},
+                        selected_style={"backgroundColor": PDS_BACKGROUND, "color": PDS_PRIMARY, "padding": "8px 16px", "borderBottom": f"2px solid {PDS_BRAND}", "fontWeight": "600"}),
             ],
         ),
 
@@ -447,6 +486,8 @@ def _apply_theme(fig, height=400):
         margin=dict(l=50, r=30, t=50, b=40),
     )
     return fig
+
+
 
 
 def _graph(fig, height=400):
@@ -613,6 +654,10 @@ def update_dashboard(relayout_data, displays, apps, triggers, active_tab, zoom_d
     prevent_initial_call=True,
 )
 def sync_graph_zoom(relayout_list, current_zoom):
+    # Guard: no synced graphs exist (e.g. during tab switch)
+    if not relayout_list:
+        return no_update
+
     triggered_id = ctx.triggered_id
     if not triggered_id or not isinstance(triggered_id, dict):
         return no_update
@@ -621,17 +666,25 @@ def sync_graph_zoom(relayout_list, current_zoom):
     # ctx.args_grouping[0] is a list of dicts with {"id": {...}, "value": ...}
     # matching the ALL pattern. We must find the entry whose id matches triggered_id.
     relayout = None
-    for item in ctx.args_grouping[0]:
-        if item["id"] == triggered_id:
+    args = ctx.args_grouping
+    if not args or not isinstance(args, list) or len(args) == 0:
+        return no_update
+    group = args[0]
+    if not isinstance(group, list):
+        return no_update
+    for item in group:
+        if not isinstance(item, dict):
+            continue
+        if item.get("id") == triggered_id:
             relayout = item.get("value")
             break
 
-    if not relayout:
+    if not relayout or not isinstance(relayout, dict):
         return no_update
 
-    # Check autorange / home button FIRST (before range)
-    if relayout.get("xaxis.autorange"):
-        return None
+    # Ignore autosize events (fired when graphs are first rendered after tab switch)
+    if relayout.get("autosize") or relayout.get("xaxis.autorange"):
+        return no_update
 
     x0 = relayout.get("xaxis.range[0]")
     x1 = relayout.get("xaxis.range[1]")
@@ -788,28 +841,29 @@ def _build_timeline_tab(events, dfs, displays, zoom_range=None):
     if not df_mem.empty:
         mem_exp = expand_samples(df_mem)
         if "availMb" in mem_exp.columns and "datetime" in mem_exp.columns:
+            mem_exp["availGb"] = pd.to_numeric(mem_exp["availMb"], errors="coerce") / 1000
             fig_mem = go.Figure()
             fig_mem.add_trace(go.Scatter(
-                x=mem_exp["datetime"], y=mem_exp["availMb"], mode="lines",
+                x=mem_exp["datetime"], y=mem_exp["availGb"], mode="lines",
                 name="Available", line=dict(color="#0f9b8e", width=2),
                 fill="tozeroy", fillcolor="rgba(15,155,142,0.1)",
             ))
             # Add total memory as dashed red line
-            total_mb = None
+            total_gb = None
             if "totalMem" in df_mem.columns:
                 total_vals = df_mem["totalMem"].dropna()
                 if len(total_vals) > 0:
-                    total_mb = int(total_vals.iloc[0]) / (1024 * 1024)
-            if total_mb:
-                fig_mem.add_hline(y=total_mb, line_dash="dash", line_color="red",
-                                  annotation_text=f"Total: {total_mb:.0f} MB")
+                    total_gb = int(total_vals.iloc[0]) / (1024 * 1024 * 1000)
+            if total_gb:
+                fig_mem.add_hline(y=total_gb, line_dash="dash", line_color="red",
+                                  annotation_text=f"Total: {total_gb:.1f} GB")
                 fig_mem.add_trace(go.Scatter(
                     x=[None], y=[None], mode="lines",
                     line=dict(color="red", dash="dash", width=2),
-                    name=f"Total ({total_mb:.0f} MB)", showlegend=True,
+                    name=f"Total ({total_gb:.1f} GB)", showlegend=True,
                 ))
             fig_mem.update_layout(
-                title="Available Memory (MB)", yaxis_title="MB", height=250,
+                title="Available Memory", yaxis_title="GB", height=250,
                 legend=dict(orientation="h", y=1.0, yanchor="bottom", x=0, font=dict(size=9)),
                 xaxis=dict(range=[x_min, x_max]),
             )
@@ -957,7 +1011,7 @@ def _build_overview_tab(events, dfs, zoom_range=None):
 
     # --- System Impact Section ---
     children.append(html.H3("System Impact",
-                             style={"color": "#0f9b8e", "marginTop": "32px", "marginBottom": "8px"}))
+                             style={"color": PDS_PRIMARY, "marginTop": "32px", "marginBottom": "8px"}))
     children.append(html.P(
         "How does the DataCollector service affect system resources? "
         "Correlating event throughput with memory, FPS, and CPU.",
@@ -982,21 +1036,22 @@ def _build_overview_tab(events, dfs, zoom_range=None):
             mem_exp = expand_samples(df_mem)
             if "availMb" in mem_exp.columns and "datetime" in mem_exp.columns:
                 mem_exp["availMb"] = pd.to_numeric(mem_exp["availMb"], errors="coerce")
+                mem_exp["availGb"] = mem_exp["availMb"] / 1000
                 mem_exp["time_bin"] = mem_exp["datetime"].dt.floor("1min")
-                mem_avg = mem_exp.groupby("time_bin")["availMb"].mean().reset_index()
+                mem_avg = mem_exp.groupby("time_bin")["availGb"].mean().reset_index()
                 merged = rate.merge(mem_avg, on="time_bin", how="inner")
                 if not merged.empty:
                     fig_ev_mem = make_subplots(specs=[[{"secondary_y": True}]])
                     fig_ev_mem.add_trace(go.Bar(x=merged["time_bin"], y=merged["events_per_min"],
                                                 name="Events/min", marker_color="rgba(15,155,142,0.5)"),
                                          secondary_y=False)
-                    fig_ev_mem.add_trace(go.Scatter(x=merged["time_bin"], y=merged["availMb"],
-                                                    mode="lines+markers", name="Available Memory (MB)",
+                    fig_ev_mem.add_trace(go.Scatter(x=merged["time_bin"], y=merged["availGb"],
+                                                    mode="lines+markers", name="Available Memory",
                                                     line=dict(color="#e74c3c", width=2)),
                                          secondary_y=True)
                     fig_ev_mem.update_layout(title="Event Throughput vs Available Memory")
                     fig_ev_mem.update_yaxes(title_text="Events/min", secondary_y=False)
-                    fig_ev_mem.update_yaxes(title_text="MB", secondary_y=True)
+                    fig_ev_mem.update_yaxes(title_text="GB", secondary_y=True)
 
         # Event Rate vs FPS & Dropped Frames
         df_fps = dfs.get("Display_FrameRate", pd.DataFrame())
@@ -1408,18 +1463,19 @@ def _build_performance_tab(dfs, zoom_range=None):
     if not df_mem.empty:
         mem_exp = expand_samples(df_mem)
         if "availMb" in mem_exp.columns and "datetime" in mem_exp.columns:
-            fig_mem.add_trace(go.Scatter(x=mem_exp["datetime"], y=mem_exp["availMb"],
-                                         mode="lines+markers", name="Available MB",
+            mem_exp["availGb"] = pd.to_numeric(mem_exp["availMb"], errors="coerce") / 1000
+            fig_mem.add_trace(go.Scatter(x=mem_exp["datetime"], y=mem_exp["availGb"],
+                                         mode="lines+markers", name="Available",
                                          line=dict(color="#0f9b8e")))
-            total_mb = None
+            total_gb = None
             if "totalMem" in df_mem.columns:
                 total_vals = df_mem["totalMem"].dropna()
                 if len(total_vals) > 0:
-                    total_mb = int(total_vals.iloc[0]) / (1024 * 1024)
-            if total_mb:
-                fig_mem.add_hline(y=total_mb, line_dash="dash", line_color="red",
-                                  annotation_text=f"Total: {total_mb:.0f} MB")
-            fig_mem.update_layout(title="Memory Over Time", yaxis_title="MB")
+                    total_gb = int(total_vals.iloc[0]) / (1024 * 1024 * 1000)
+            if total_gb:
+                fig_mem.add_hline(y=total_gb, line_dash="dash", line_color="red",
+                                  annotation_text=f"Total: {total_gb:.1f} GB")
+            fig_mem.update_layout(title="Memory Over Time", yaxis_title="GB")
 
     children.append(_full(_synced_graph(fig_mem, 380, zoom_range)))
 
