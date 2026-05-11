@@ -22,13 +22,15 @@ Last updated: 2026-05-11
 
 ## Features
 
+- Update network traffic, to also show wifi, cellular and tethering
+- Add bluetooth, wifi, tethering on, off and tx,rx
+- Add connection flows (sankey for devices)
 - [ ] Add GPS analytics view
 - [ ] Add Navigation analytics view
 - [ ] Add Media analytics view
 - [ ] Show VHALs over time — plot property values as time series, highlight errors/wrong values
 - [ ] Remove the session bar at the top — replace with a time/date range slider
 - [ ] Assess DataCollector performance impact — from the collected data, determine if the component affects the emulator significantly
-
 ---
 
 ## Styling

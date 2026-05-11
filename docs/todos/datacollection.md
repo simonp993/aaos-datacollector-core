@@ -9,23 +9,33 @@ Last updated: 2026-05-11
 ## 1. Broken Collectors new features (emitting nothing / wrong data)
 
 Before Weekend Drive
-- [ ] Bluetooth collector — usage, signal strength, connected devices, profiles active.
-- [ ] AssistantCollector — signal schema is off and it doesn't work. Fix schema + emission.
-- [ ] C9: TelephonyCollector — seems incorrect, no trigger field. Fix trigger logic.
-- [ ] LocationCollector - Test if working
-- [ ] G12: Display on/off action — detect and emit when displays are turned on/off/standby for ALL displays (center, cluster, passenger, rear). Standby state (e.g. music cover) should be distinct from OFF.
-- [ ] Network usage reiteration — verify tethering vs WiFi vs cellular separation. Is down/up counted per interface? Is tethering traffic separable? Can we calculate how much tethered devices consume of the car's internet?
-- [ ] Connectivity_SignalStrength — verify it covers WiFi, cellular, AND tethering signal strength.
-- [ ] Tethering traffic collector — traffic between connected device ↔ car, number of tethered devices, how much internet they consume through the car's cellular.
-- [ ] Location provider collector — `adb shell dumpsys location` shows which packages are registered for location updates, provider, interval. Proves causal links (e.g. Mapbox → FLP). Collect periodically or on-demand.
-- [ ] Navigation fix — two signals issue, needs investigation.
-- [ ] CarUserManager collector — emit events on user profile lifecycle: driver switch, guest session start/stop, user creation/removal. Guaranteed API on all AAOS builds.
+-when touching with >=two fingers: it is Touch_PointerDown and not Touch_Down / Up, this must be a bug. Touch_PointerDown is old signal
+
+- The car has only center display and passenger screen, no rear screen, why is it showing a rear screen but no passenger
+also, lets fix/add Display on/off action — detect and emit when displays are turned on/off/standby for ALL displays (center, cluster, passenger, rear). Standby state (e.g. music cover) should be distinct from OFF. I can turn the displays to standby and off when you say it
+
+- make sure operatorName in SignalStrenght cellular contains a string an not only ""
+
 - [ ] CarWatchdogManager collector — monitor system health: unresponsive services, resource overuse notifications, I/O overuse stats. Guaranteed API.
+
 - [ ] CPUCollector — `/proc/stat` read fails with EACCES (SELinux denies even system-priv on AAOS 15). Needs alternative: `dumpsys cpuinfo`, `top -bn1`, or own-process `/proc/self/stat`.
 
-After weekend drive
-- [ ] C8: TimeChangeCollector — manual user time change shows `trigger="system"` (wrong), missing `previous` value.
+- [ ] Network usage reiteration — verify tethering vs WiFi vs cellular separation. Is down/up counted per interface? Is tethering traffic separable if possible? Can we calculate how much tethered devices consume of the car's internet? Connectivity_SignalStrength — verify it covers WiFi, cellular, AND tethering signal strength if possible? But according to our discussions, not all is possible? 
 
+- [ ] Location provider collector — `adb shell dumpsys location` shows which packages are registered for location updates, provider, interval. Proves causal links (e.g. Mapbox → FLP). Collect periodically or on-demand.
+
+-  Is the bluetooth connection also collecting for other users but 14? so would 10, 11, 12, or so work out of the box 
+
+
+After weekend drive
+- [ ] CarUserManager collector — emit events on user profile lifecycle: driver switch, guest session start/stop, user creation/removal. Guaranteed API on all AAOS builds.
+- [ ] C9: TelephonyCollector — seems incorrect, no trigger field. Fix trigger logic.I have my phone connected and am starting a call when you say it.- [ ] LocationCollector - Test if working
+- are vhal changes sent correctly? 
+- [ ] AssistantCollector — signal schema is off and it doesn't work. Fix schema + emission.
+- when a new song is played (becauese old one is done) there are two events Media_PositionJumped and Media_TrackChanged, in this case (when Media_TrackChanged is send) we want no postion jumped. 
+- [ ] C8: TimeChangeCollector — manual user time change shows `trigger="system"` (wrong), missing `previous` value.
+- Iterate on the trigger, they are not correct always
+- When switching from carplay to bluetooth I get no new Bluetooth device list, even though my phone was connected = false in the lsat payload and that must have changed when switching from carplay to bluetooth. 
 
 ---
 

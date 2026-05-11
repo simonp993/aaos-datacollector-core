@@ -41,9 +41,13 @@ class NetworkStatsCollector @Inject constructor(
     @Volatile
     private var running = false
 
-    // Previous cumulative snapshot: uid → (rxBytes, txBytes)
+    // Previous cumulative snapshot: uid → UidStats(rxBytes, txBytes, networkType)
     // Delta = current - previous gives exact per-interval traffic without overlap.
-    private var previousSnapshot: Map<Int, Pair<Long, Long>> = emptyMap()
+    private var previousSnapshot: Map<Int, UidStats> = emptyMap()
+
+    // Previous tethering interface byte counters for delta calculation
+    private var previousTetheringRx: Long = 0L
+    private var previousTetheringTx: Long = 0L
 
     override suspend fun start() {
         running = true
@@ -54,11 +58,15 @@ class NetworkStatsCollector @Inject constructor(
 
         // Take initial snapshot so the first delta is meaningful (no cumulative dump)
         previousSnapshot = parseDumpsysNetstats()
+        val tetheringInit = readTetheringInterfaceBytes()
+        previousTetheringRx = tetheringInit.first
+        previousTetheringTx = tetheringInit.second
         delay(STAGGER_DELAY_MS) // Stagger to spread flush bursts
         delay(POLL_INTERVAL_MS)
 
         while (running && coroutineContext.isActive) {
             emitTotalStats()
+            emitTetheringStats()
             emitPerUidStats(userIds)
             delay(POLL_INTERVAL_MS)
         }
@@ -200,6 +208,117 @@ class NetworkStatsCollector @Inject constructor(
     }
 
     /**
+     * Emits tethering traffic stats: total bytes through the hotspot interface(s) and
+     * the number of currently connected clients.
+     *
+     * Data sources:
+     * - `dumpsys tethering` → identifies active tethering interfaces (TetheredState)
+     * - `/proc/net/dev` → cumulative rx/tx byte counters per interface
+     * - `ip neigh show dev <iface>` → connected clients (unique MACs)
+     */
+    @Suppress("TooGenericExceptionCaught")
+    private fun emitTetheringStats() {
+        try {
+            val current = readTetheringInterfaceBytes()
+            val deltaRx = (current.first - previousTetheringRx).coerceAtLeast(0L)
+            val deltaTx = (current.second - previousTetheringTx).coerceAtLeast(0L)
+            previousTetheringRx = current.first
+            previousTetheringTx = current.second
+
+            val interfaces = getTetheringInterfaces()
+            val clients = countTetheringClients(interfaces)
+
+            telemetry.send(
+                TelemetryEvent(
+                    signalId = signalId,
+                    payload = mapOf(
+                        "actionName" to "Network_TetheringTotal",
+                        "trigger" to "heartbeat",
+                        "metadata" to mapOf(
+                            "rxBytes" to deltaRx,
+                            "txBytes" to deltaTx,
+                            "connectedClients" to clients,
+                            "interfaces" to interfaces,
+                        ),
+                    ),
+                ),
+            )
+        } catch (e: Exception) {
+            logger.w(TAG, "Failed to collect tethering stats", e)
+        }
+    }
+
+    /**
+     * Discovers active tethering interfaces from `dumpsys tethering`.
+     * Looks for interfaces in "TetheredState" or "LocalHotspotState".
+     */
+    @Suppress("TooGenericExceptionCaught")
+    private fun getTetheringInterfaces(): List<String> {
+        return try {
+            val process = Runtime.getRuntime().exec(arrayOf("dumpsys", "tethering"))
+            val output = process.inputStream.bufferedReader().readText()
+            process.waitFor()
+            TETHER_IFACE_PATTERN.findAll(output).map { it.groupValues[1] }.toList()
+        } catch (e: Exception) {
+            logger.d(TAG, "Failed to read tethering interfaces: ${e.message}")
+            emptyList()
+        }
+    }
+
+    /**
+     * Reads cumulative byte counters from /proc/net/dev for active tethering interfaces.
+     * Returns (totalRx, totalTx) summed across all tethering interfaces.
+     */
+    @Suppress("TooGenericExceptionCaught")
+    private fun readTetheringInterfaceBytes(): Pair<Long, Long> {
+        val interfaces = getTetheringInterfaces()
+        if (interfaces.isEmpty()) return 0L to 0L
+        return try {
+            val process = Runtime.getRuntime().exec(arrayOf("cat", "/proc/net/dev"))
+            val output = process.inputStream.bufferedReader().readText()
+            process.waitFor()
+            var totalRx = 0L
+            var totalTx = 0L
+            for (line in output.lines()) {
+                val trimmed = line.trim()
+                val iface = trimmed.substringBefore(":").trim()
+                if (iface in interfaces) {
+                    val fields = trimmed.substringAfter(":").trim().split("\\s+".toRegex())
+                    if (fields.size >= 9) {
+                        totalRx += fields[0].toLongOrNull() ?: 0L
+                        totalTx += fields[8].toLongOrNull() ?: 0L
+                    }
+                }
+            }
+            totalRx to totalTx
+        } catch (e: Exception) {
+            logger.d(TAG, "Failed to read /proc/net/dev: ${e.message}")
+            0L to 0L
+        }
+    }
+
+    /**
+     * Counts unique tethering clients by querying neighbor table for each interface.
+     * Deduplicates by MAC address (same device has IPv4 + IPv6 neighbors).
+     */
+    @Suppress("TooGenericExceptionCaught")
+    private fun countTetheringClients(interfaces: List<String>): Int {
+        if (interfaces.isEmpty()) return 0
+        val macs = mutableSetOf<String>()
+        for (iface in interfaces) {
+            try {
+                val process = Runtime.getRuntime().exec(arrayOf("ip", "neigh", "show", "dev", iface))
+                val output = process.inputStream.bufferedReader().readText()
+                process.waitFor()
+                MAC_PATTERN.findAll(output).forEach { macs.add(it.value.lowercase()) }
+            } catch (e: Exception) {
+                logger.d(TAG, "Failed to read neighbors for $iface: ${e.message}")
+            }
+        }
+        return macs.size
+    }
+
+    /**
      * Emits per-UID delta stats for all users using dumpsys snapshot differencing.
      *
      * Flow: snapshot current cumulative counters → compute delta vs previous → emit only
@@ -227,22 +346,24 @@ class NetworkStatsCollector @Inject constructor(
 
             val perApp = mutableListOf<Map<String, Any?>>()
             for ((uid, delta) in deltas) {
-                val userId = uid / PER_USER_RANGE
+                val userId = uid.first / PER_USER_RANGE
                 val userContext = userContexts[userId]
                 val pkgNames = try {
-                    userContext?.packageManager?.getPackagesForUid(uid)?.toList()
+                    userContext?.packageManager?.getPackagesForUid(uid.first)?.toList()
                 } catch (e: Exception) {
                     null
                 }
                 perApp.add(
                     buildMap {
-                        put("uid", uid)
+                        put("uid", uid.first)
                         put("user", userId)
                         put(
                             "packages",
-                            pkgNames ?: SYSTEM_UID_NAMES[uid % PER_USER_RANGE]?.let { listOf(it) }
-                                ?: listOf("uid:$uid"),
+                            pkgNames
+                                ?: SYSTEM_UID_NAMES[uid.first % PER_USER_RANGE]?.let { listOf(it) }
+                                ?: listOf("uid:${uid.first}"),
                         )
+                        put("networkType", uid.second)
                         put("rxBytes", delta.first)
                         put("txBytes", delta.second)
                     },
@@ -270,31 +391,38 @@ class NetworkStatsCollector @Inject constructor(
 
     /**
      * Computes the delta between two cumulative snapshots.
+     * Key is (uid, networkType) to keep per-network-type granularity.
      * Only returns entries where at least one of rxBytes/txBytes increased.
      * Handles counter resets gracefully (treats as new traffic from 0).
      */
     private fun computeDeltas(
-        previous: Map<Int, Pair<Long, Long>>,
-        current: Map<Int, Pair<Long, Long>>,
-    ): Map<Int, Pair<Long, Long>> {
-        val result = mutableMapOf<Int, Pair<Long, Long>>()
-        for ((uid, curr) in current) {
-            val prev = previous[uid] ?: (0L to 0L)
+        previous: Map<Int, UidStats>,
+        current: Map<Int, UidStats>,
+    ): Map<Pair<Int, String>, Pair<Long, Long>> {
+        // Expand by (uid, networkType) for per-type deltas
+        val prevByKey = previous.mapKeys { (uid, stats) -> uid to stats.networkType }
+            .mapValues { it.value.rxBytes to it.value.txBytes }
+        val currByKey = current.mapKeys { (uid, stats) -> uid to stats.networkType }
+            .mapValues { it.value.rxBytes to it.value.txBytes }
+
+        val result = mutableMapOf<Pair<Int, String>, Pair<Long, Long>>()
+        for ((key, curr) in currByKey) {
+            val prev = prevByKey[key] ?: (0L to 0L)
             val deltaRx = (curr.first - prev.first).coerceAtLeast(0L)
             val deltaTx = (curr.second - prev.second).coerceAtLeast(0L)
             if (deltaRx > 0 || deltaTx > 0) {
-                result[uid] = deltaRx to deltaTx
+                result[key] = deltaRx to deltaTx
             }
         }
         return result
     }
 
     /**
-     * Parses `dumpsys netstats --uid` to extract cumulative byte counters per UID.
-     * Returns ALL UIDs (all users) in a single snapshot.
+     * Parses `dumpsys netstats --uid` to extract cumulative byte counters per UID,
+     * tagged with network type (wifi, mobile, vpn, other).
      *
      * The dumpsys output contains bucket history entries like:
-     *   ident=[...] uid=1010187 set=FOREGROUND tag=0x0
+     *   ident=[{type=1, ...}] uid=1010187 set=FOREGROUND tag=0x0
      *     NetworkStatsHistory: bucketDuration=7200
      *       st=1778140800 rb=803444 rp=844 tb=133234 tp=603 op=0
      *
@@ -303,18 +431,20 @@ class NetworkStatsCollector @Inject constructor(
      * exact per-interval traffic.
      */
     @Suppress("TooGenericExceptionCaught")
-    private fun parseDumpsysNetstats(): Map<Int, Pair<Long, Long>> {
-        val result = mutableMapOf<Int, Pair<Long, Long>>()
+    private fun parseDumpsysNetstats(): Map<Int, UidStats> {
+        val result = mutableMapOf<Int, UidStats>()
         try {
             val process = Runtime.getRuntime().exec(arrayOf("dumpsys", "netstats", "--uid"))
             val output = process.inputStream.bufferedReader().readText()
             process.waitFor()
 
             var currentUid = -1
+            var currentNetType = "other"
             for (line in output.lines()) {
                 val uidMatch = UID_PATTERN.find(line)
                 if (uidMatch != null) {
                     currentUid = uidMatch.groupValues[1].toInt()
+                    currentNetType = resolveNetworkType(line)
                     continue
                 }
                 if (currentUid >= 0) {
@@ -322,8 +452,15 @@ class NetworkStatsCollector @Inject constructor(
                     if (statsMatch != null) {
                         val rb = statsMatch.groupValues[1].toLong()
                         val tb = statsMatch.groupValues[2].toLong()
-                        val existing = result[currentUid] ?: (0L to 0L)
-                        result[currentUid] = (existing.first + rb) to (existing.second + tb)
+                        val existing = result[currentUid]
+                        if (existing != null) {
+                            result[currentUid] = existing.copy(
+                                rxBytes = existing.rxBytes + rb,
+                                txBytes = existing.txBytes + tb,
+                            )
+                        } else {
+                            result[currentUid] = UidStats(rb, tb, currentNetType)
+                        }
                     }
                 }
             }
@@ -333,13 +470,41 @@ class NetworkStatsCollector @Inject constructor(
         return result
     }
 
+    private fun resolveNetworkType(identLine: String): String {
+        val typeMatch = NET_TYPE_PATTERN.find(identLine)
+        return when (typeMatch?.groupValues?.get(1)?.toIntOrNull()) {
+            TYPE_WIFI -> "wifi"
+            TYPE_MOBILE -> "mobile"
+            TYPE_VPN -> "vpn"
+            else -> "other"
+        }
+    }
+
+    private data class UidStats(
+        val rxBytes: Long,
+        val txBytes: Long,
+        val networkType: String,
+    )
+
     companion object {
         private const val TAG = "NetworkStatsCollector"
         private const val POLL_INTERVAL_MS = 60_000L
         private const val STAGGER_DELAY_MS = 9_000L
         private const val PER_USER_RANGE = 100_000
+
+        // ConnectivityManager network type constants
+        private const val TYPE_MOBILE = 0
+        private const val TYPE_WIFI = 1
+        private const val TYPE_VPN = 9
+
         private val UID_PATTERN = Regex("""\buid=(\d+)\b""")
         private val STATS_PATTERN = Regex("""rb=(\d+).*tb=(\d+)""")
+        private val NET_TYPE_PATTERN = Regex("""type=(\d+)""")
+        private val TETHER_IFACE_PATTERN =
+            Regex("""^\s+(\S+)\s+-\s+(?:TetheredState|LocalHotspotState)""", RegexOption.MULTILINE)
+        private val MAC_PATTERN =
+            Regex("""lladdr\s+([0-9a-fA-F:]{17})""")
+
         private val SYSTEM_UID_NAMES = mapOf(
             0 to "root",
             1000 to "system",
