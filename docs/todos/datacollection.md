@@ -9,27 +9,37 @@ Last updated: 2026-05-11
 ## 1. Broken Collectors new features (emitting nothing / wrong data)
 
 Before Weekend Drive
+- Multi-user coverage — ensure all collectors query data for user 0 AND user 10, 11, 12, 14, etc. The current system has for example different ids than the previous one: 
+Users:
+        UserInfo{0:Driver:813} running
+        UserInfo{10:Julius Cäsar:412}
+        UserInfo{11:#defaultUser:412}
+        UserInfo{13:G3_V_ECE:412} running
+When analyzing all collectors, do you see a possible issue in that regard with any of them? 
+- standby mode not detected on passenger display (only on/off)
+- delete the app and logs
 
-- make sure operatorName in SignalStrenght cellular contains a string an not only ""
+- VHAL Changes, specifically speed
+- See if App_ExitDetected works
+- standby mode not detected on passenger display (only on/off)
+- Audio muting does not work.
+- save the package list and only send differences at startup (including a message no differences or empty list if nothing changed)
+- File savings toggle — ability to turn JSONL file writing on/off at runtime (e.g. via adb system property). -> ADB
+- File size limiter — verify the log rotation / size cap works on emulator so storage doesn't fill up. Or implement a delete mechanism, that deletes files that are older than 7 days for example. What would you sugges.t
 
-- Network: Key 5G Signal Metrics
-Is 5G differentiation possible? 
+MITTWOCH
+- [ ] Location provider collector — `adb shell dumpsys location` shows which packages are registered for location updates, provider, interval. Proves causal links (e.g. Mapbox → FLP). Collect periodically or on-demand.
+
+- Now lets reconsider Network again: 
+Is 5G differentiation possible? Key 5G Signal Metrics:
 RSRP (Reference Signal Received Power - dBm): Measures the signal strength from a single cell base station. This is the most crucial metric for gauging coverage.
 SINR (Signal to Interference plus Noise Ratio - dB): Measures the clarity of the signal compared to background noise and interference. A higher SINR determines higher modulation (like 1024-QAM) and faster speeds.
 RSRQ (Reference Signal Received Quality - dB): Indicates the overall quality of the received signal, heavily influenced by network load and interference.
 RSSI (Received Signal Strength Indicator - dBm): The total received power, including desired signal, interference, and noise
+make sure operatorName in SignalStrenght cellular contains a string an not only "" (I know it is empty when on wifi, but please chck, that it is no bug)
 
-- [ ] CarWatchdogManager collector — monitor system health: unresponsive services, resource overuse notifications, I/O overuse stats. Guaranteed API. --> Do we get app crashes? 
+- https://perfetto.dev/
 
-- [ ] CPUCollector — `/proc/stat` read fails with EACCES (SELinux denies even system-priv on AAOS 15). Needs alternative: `dumpsys cpuinfo`, `top -bn1`, or own-process `/proc/self/stat`.
-
-- [ ] Network usage reiteration — verify tethering vs WiFi vs cellular separation. Is down/up counted per interface? Is tethering traffic separable if possible? Can we calculate how much tethered devices consume of the car's internet? Connectivity_SignalStrength — verify it covers WiFi, cellular, AND tethering signal strength if possible? But according to our discussions, not all is possible? 
-
-- [ ] Location provider collector — `adb shell dumpsys location` shows which packages are registered for location updates, provider, interval. Proves causal links (e.g. Mapbox → FLP). Collect periodically or on-demand.
-
-- VHAL Changes
-
-- Standby mode not correctly gotten, but it is possible. 
 
 During weekend drive
 - Test Tethering separation in real car: It's NOT definitively impossible on a real car with cellular. The BPF forwarding stats (mBpfStatsMap) in dumpsys tethering are only populated when traffic is actually being forwarded through an upstream. On your WiFi-only car, there's no NAT forwarding to measure (clients on the hotspot are local-only or go through WiFi which merges). On a car with cellular as upstream, the BPF tethering offload should populate those forwarding counters — they'd represent exactly the internet-forwarded portion. I updated the comment to be more nuanced about this. Also, READ_NETWORK_USAGE_HISTORY + platform signature might allow calling the hidden NetworkStatsManager.querySummaryForDevice() with the tethering interface type. This is worth revisiting once you have a cellular-equipped car to test on.
@@ -46,6 +56,7 @@ After weekend drive
 - Iterate on the trigger, they are not correct always
 - When switching from carplay to bluetooth I get no new Bluetooth device list, even though my phone was connected = false in the lsat payload and that must have changed when switching from carplay to bluetooth. 
 - HUD turn on off and brightness not working
+- Integrate the storage usage shown in settings: Music and audio, Other apps, Files, System
 
 
 
@@ -53,10 +64,6 @@ After weekend drive
 
 ## 2. Architecture / Cross-Cutting (G-series)
 
-Before Weekend Drive
-- [ ] G4: Multi-user coverage — ensure all collectors query data for user 0 AND user 10. PackageCollector and NetworkStatsCollector done; apply pattern to others.
-- [ ] File savings toggle — ability to turn JSONL file writing on/off at runtime (e.g. via adb system property).
-- [ ] File size limiter — verify the log rotation / size cap works on emulator so storage doesn't fill up.
 
 After Weekend Drive
 - [ ] G7: Make events smaller — zip

@@ -8,9 +8,10 @@ import com.porsche.aaos.platform.telemetry.collector.system.AssistantCollector
 import com.porsche.aaos.platform.telemetry.collector.system.AudioCollector
 import com.porsche.aaos.platform.telemetry.collector.system.BluetoothCollector
 import com.porsche.aaos.platform.telemetry.collector.system.ConnectivityCollector
+import com.porsche.aaos.platform.telemetry.collector.system.AppExitCollector
 import com.porsche.aaos.platform.telemetry.collector.system.DisplayStateCollector
-import com.porsche.aaos.platform.telemetry.collector.system.CpuCollector
 import com.porsche.aaos.platform.telemetry.collector.system.FrameRateCollector
+// import com.porsche.aaos.platform.telemetry.collector.system.IoCollector
 import com.porsche.aaos.platform.telemetry.collector.system.LocationCollector
 import com.porsche.aaos.platform.telemetry.collector.system.MemoryCollector
 import com.porsche.aaos.platform.telemetry.collector.system.NavigationCollector
@@ -19,6 +20,8 @@ import com.porsche.aaos.platform.telemetry.collector.system.ProcessCollector
 import com.porsche.aaos.platform.telemetry.collector.system.SelfMonitorCollector
 import com.porsche.aaos.platform.telemetry.collector.system.SensorBatteryCollector
 import com.porsche.aaos.platform.telemetry.collector.system.StorageCollector
+import com.porsche.aaos.platform.telemetry.collector.system.SystemCpuCollector
+import com.porsche.aaos.platform.telemetry.collector.system.SystemMemoryCollector
 import com.porsche.aaos.platform.telemetry.collector.system.TelephonyCollector
 import com.porsche.aaos.platform.telemetry.collector.system.TimeChangeCollector
 import com.porsche.aaos.platform.telemetry.collector.system.TouchInputCollector
@@ -122,7 +125,20 @@ abstract class CollectorModule {
 
     @Binds
     @IntoSet
-    abstract fun bindCpuCollector(impl: CpuCollector): Collector
+    abstract fun bindSystemCpuCollector(impl: SystemCpuCollector): Collector
+
+    @Binds
+    @IntoSet
+    abstract fun bindSystemMemoryCollector(impl: SystemMemoryCollector): Collector
+
+    @Binds
+    @IntoSet
+    abstract fun bindAppExitCollector(impl: AppExitCollector): Collector
+
+    // Limitation: IoCollector (System_IoPerPackage) disabled — SELinux denies
+    // platform_app access to carwatchdogd_service, producing no I/O data.
+    // @Binds @IntoSet
+    // abstract fun bindIoCollector(impl: IoCollector): Collector
 
     @Binds
     @IntoSet
