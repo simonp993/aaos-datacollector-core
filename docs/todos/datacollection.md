@@ -4,16 +4,25 @@ Consolidated task list for the DataCollector service.
 
 
 ## Before Weekend Drive
-- check if we get 3. AppLifecycleCollector for all users, Likely OK but should verify
-- check if we get 3. 4. AudioCollector for all users Potentially user-scoped
-- check if we get the software version? Check if we get anything about jokerkey rsi? 
+- Make the sampled vhals send in batches (eg speed)
+- Audio muting is not sending a signal, audio volume changes do. 
+- delete the app and logs from device
+
+- check if we get the software version of the android system or other metadata, settings has model and hardware, porsche build number, android versionandroidr security patch level, kernel veriosn, build number, bt adress, serial number imei? 
+
+- Get button press jokerkey: 
+RSI Jokerkey — The jokerkey data flows through ESO's RsiJokerKeyConnectorImpl which is part of the CarInterface app (de.eso.porsche.carinterface). It uses the RSI path /Jokerkey$/actions and logs:
+JokerKeyFunctionRegistration events (which functions are registered to which key)
+JokerKeyAssignment (current mapping: JOKER_KEY_1=IntRecuOffOn, JOKER_KEY_2=ChangeSource)
+Button press states (e.g. state=PRESSED)
+What we already capture indirectly: Our AppLifecycleCollector picks up the JokerKeyPopupActivity as a focus change when the popup appears — so we see when the jokerkey was long pressed to change the assignment, but not which key or which function was triggered.
+To get actual jokerkey press events, we'd need to subscribe to the RSI resource /Jokerkey$/actions via the vehicle-connectivity module. That signal is not in our current RSI subscription list. Want me to check what RSI signals we currently subscribe to, and look into adding the jokerkey one?
 
 
 - Change the frequency of Display_StateSnapshot and Display_BrightnessSnapshot, they both are send every minute it seems and not only at startup
-- How is the VHAL collection currently implemented? On change, frequency, batched? The goal is to have some onchange and some with frequency. E.g. fanspeed is onchange, but speed is frequency every 5s. 
 
-- Audio muting does not work.
 - See if App_ExitDetected works
+
 - File size limiter — verify the log rotation / size cap works on emulator so storage doesn't fill up. Or implement a delete mechanism, that deletes files that are older than 7 days for example. What would you suggest?
 
 

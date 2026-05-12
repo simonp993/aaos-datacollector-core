@@ -213,7 +213,6 @@ class VehiclePropertyCollector @Inject constructor(
                     for (propertyId in propIds) {
                         val value = sampledLatest[propertyId] ?: continue
                         val previous = previousValues.put(propertyId, value)
-                        if (value == previous) continue
                         val propName = propLookup[propertyId]?.name ?: continue
                         emitChange(propName, previous, value)
                     }
