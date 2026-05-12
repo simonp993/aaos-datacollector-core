@@ -16,8 +16,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Available VHAL properties on Scylla (MIB4) emulator — 662 total
@@ -186,46 +184,69 @@ class VehiclePropertyCollector @Inject constructor(
     private val signalId = TelemetryEvent.signalId("${name}Collector")
 
     private val previousValues = ConcurrentHashMap<Int, Any>()
-    private val changeBatch = mutableListOf<List<Any?>>()
-    private val batchMutex = Mutex()
-    private var flushJob: Job? = null
+
+    // For SAMPLED properties: stores the latest value received from VHAL.
+    // A periodic job reads and emits these at the configured interval.
+    private val sampledLatest = ConcurrentHashMap<Int, Any>()
+    private val sampledJobs = mutableListOf<Job>()
 
     @Volatile
     private var running = false
 
     override suspend fun start() {
         running = true
-        logger.i(TAG, "Starting VHAL observation (batched every ${FLUSH_INTERVAL_MS / 1000}s)")
+        logger.i(TAG, "Starting VHAL observation (immediate per-property emission)")
 
-        // Start periodic flush job
-        flushJob = CoroutineScope(Dispatchers.Default).launch {
-            delay(STAGGER_DELAY_MS)
-            while (isActive) {
-                delay(FLUSH_INTERVAL_MS)
-                flushBatch()
+        // Start sampling jobs for each unique interval
+        val sampledByInterval = OBSERVED_PROPERTIES
+            .filter { it.mode is SampleMode.Sampled }
+            .groupBy { (it.mode as SampleMode.Sampled).intervalMs }
+
+        val propLookup = OBSERVED_PROPERTIES.associateBy { it.propertyId }
+
+        for ((intervalMs, props) in sampledByInterval) {
+            val propIds = props.map { it.propertyId }.toSet()
+            val job = CoroutineScope(Dispatchers.Default).launch {
+                delay(STAGGER_DELAY_MS)
+                while (isActive) {
+                    delay(intervalMs)
+                    for (propertyId in propIds) {
+                        val value = sampledLatest[propertyId] ?: continue
+                        val previous = previousValues.put(propertyId, value)
+                        if (value == previous) continue
+                        val propName = propLookup[propertyId]?.name ?: continue
+                        emitChange(propName, previous, value)
+                    }
+                }
             }
+            sampledJobs.add(job)
+            logger.i(
+                TAG,
+                "Sampling ${props.size} properties every ${intervalMs / 1000}s: " +
+                    props.joinToString { it.name },
+            )
         }
 
         coroutineScope {
-            OBSERVED_PROPERTIES.forEach { (propertyId, propertyName) ->
+            OBSERVED_PROPERTIES.forEach { prop ->
                 launch {
-                    vhalPropertyService.observeProperty<Any>(propertyId)
+                    vhalPropertyService.observeProperty<Any>(prop.propertyId)
                         .catch { e ->
-                            logger.w(TAG, "Failed to observe $propertyName ($propertyId)", e)
+                            logger.w(TAG, "Failed to observe ${prop.name} (${prop.propertyId})", e)
                         }
                         .collect { value ->
                             if (!running) return@collect
-                            val previous = previousValues.put(propertyId, value)
-                            if (value == previous) return@collect
 
-                            // Append to batch: [timestamp, property, previous, current]
-                            val entry = listOf(
-                                System.currentTimeMillis(),
-                                propertyName,
-                                previous,
-                                value,
-                            )
-                            batchMutex.withLock { changeBatch.add(entry) }
+                            when (prop.mode) {
+                                is SampleMode.OnChange -> {
+                                    val previous = previousValues.put(prop.propertyId, value)
+                                    if (value == previous) return@collect
+                                    emitChange(prop.name, previous, value)
+                                }
+                                is SampleMode.Sampled -> {
+                                    sampledLatest[prop.propertyId] = value
+                                }
+                            }
                         }
                 }
             }
@@ -234,269 +255,168 @@ class VehiclePropertyCollector @Inject constructor(
 
     override fun stop() {
         running = false
-        flushJob?.cancel()
-        flushJob = null
+        sampledJobs.forEach { it.cancel() }
+        sampledJobs.clear()
+        sampledLatest.clear()
         previousValues.clear()
         logger.i(TAG, "Stopped")
     }
 
-    private suspend fun flushBatch() {
-        val snapshot = batchMutex.withLock {
-            if (changeBatch.isEmpty()) return
-            changeBatch.toList().also { changeBatch.clear() }
-        }
-
+    private fun emitChange(property: String, previous: Any?, current: Any?) {
         telemetry.send(
             TelemetryEvent(
                 signalId = signalId,
                 payload = mapOf(
-                    "actionName" to "VHAL_ValuesChanged",
-                    "trigger" to "heartbeat",
+                    "actionName" to "VHAL_ValueChanged",
+                    "trigger" to "vehicle",
                     "metadata" to mapOf(
-                        "count" to snapshot.size,
-                        "sampleSchema" to listOf("timestampMillis", "property", "previous", "current"),
-                        "changes" to snapshot,
+                        "property" to property,
+                        "previous" to previous,
+                        "current" to current,
                     ),
                 ),
             ),
         )
-        logger.d(TAG, "Flushed ${snapshot.size} VHAL changes")
     }
 
     companion object {
         private const val TAG = "VehiclePropertyCollector"
-        private const val FLUSH_INTERVAL_MS = 60_000L
         private const val STAGGER_DELAY_MS = 6_000L
+        private const val SAMPLE_5S = 5_000L
+        private const val SAMPLE_10S = 10_000L
+        private const val SAMPLE_30S = 30_000L
 
+        private sealed interface SampleMode {
+            data object OnChange : SampleMode
+            data class Sampled(val intervalMs: Long) : SampleMode
+        }
+
+        private data class ObservedProperty(
+            val propertyId: Int,
+            val name: String,
+            val mode: SampleMode = SampleMode.OnChange,
+        )
+
+        // Verified against MIB4 Cayenne (2026-05-12) via:
+        //   adb shell cmd car_service get-carpropertyconfig
+        // ✓ = available on device, ✗ = not registered in VHAL
         private val OBSERVED_PROPERTIES = listOf(
             // ── Driving / Powertrain ──
-            // CONTINUOUS max 10Hz, FLOAT m/s, e.g. 0.0
-            VhalPropertyIds.PERF_VEHICLE_SPEED to "PERF_VEHICLE_SPEED",
-            // CONTINUOUS max 10Hz, FLOAT km, e.g. 23402.0
-            VhalPropertyIds.PERF_ODOMETER to "PERF_ODOMETER",
-            // CONTINUOUS max 10Hz, FLOAT degrees, e.g. 0.0
-            VhalPropertyIds.PERF_STEERING_ANGLE to "PERF_STEERING_ANGLE",
-            // CONTINUOUS max 10Hz, FLOAT rpm, e.g. 0.0
-            VhalPropertyIds.ENGINE_RPM to "ENGINE_RPM",
-            // ON_CHANGE, INT32 level enum, e.g. 2
-            VhalPropertyIds.ENGINE_OIL_LEVEL to "ENGINE_OIL_LEVEL",
-            // CONTINUOUS max 10Hz, FLOAT °C, e.g. 101.0
-            VhalPropertyIds.ENGINE_OIL_TEMP to "ENGINE_OIL_TEMP",
-            // ON_CHANGE, INT32 gear enum, e.g. 4 (DRIVE)
-            VhalPropertyIds.GEAR_SELECTION to "GEAR_SELECTION",
-            // ON_CHANGE, INT32, e.g. 4
-            VhalPropertyIds.CURRENT_GEAR to "CURRENT_GEAR",
-            // ON_CHANGE, INT32 state enum, e.g. 4 (START)
-            VhalPropertyIds.IGNITION_STATE to "IGNITION_STATE",
+            ObservedProperty(VhalPropertyIds.PERF_VEHICLE_SPEED, "PERF_VEHICLE_SPEED", SampleMode.Sampled(SAMPLE_5S)),
+            // ✗ access denied on MIB4 (permission not granted despite manifest declaration)
+            // ObservedProperty(VhalPropertyIds.PERF_ODOMETER, "PERF_ODOMETER", SampleMode.Sampled(SAMPLE_30S)),
+            // ObservedProperty(VhalPropertyIds.PERF_STEERING_ANGLE, "PERF_STEERING_ANGLE", SampleMode.Sampled(SAMPLE_5S)),
+            // ObservedProperty(VhalPropertyIds.ENGINE_RPM, "ENGINE_RPM", SampleMode.Sampled(SAMPLE_5S)),
+            // ObservedProperty(VhalPropertyIds.ENGINE_OIL_LEVEL, "ENGINE_OIL_LEVEL"),
+            // ObservedProperty(VhalPropertyIds.ENGINE_OIL_TEMP, "ENGINE_OIL_TEMP", SampleMode.Sampled(SAMPLE_30S)),
+            ObservedProperty(VhalPropertyIds.GEAR_SELECTION, "GEAR_SELECTION"),
+            ObservedProperty(VhalPropertyIds.CURRENT_GEAR, "CURRENT_GEAR"),
+            ObservedProperty(VhalPropertyIds.IGNITION_STATE, "IGNITION_STATE"),
 
             // ── Fuel / EV / Range ──
-            // CONTINUOUS max 100Hz, FLOAT mL, e.g. 15000.0
-            VhalPropertyIds.FUEL_LEVEL to "FUEL_LEVEL",
-            // ON_CHANGE, BOOL, e.g. false
-            VhalPropertyIds.FUEL_LEVEL_LOW to "FUEL_LEVEL_LOW",
-            // CONTINUOUS max 100Hz, FLOAT Wh, e.g. 150000.0
-            VhalPropertyIds.EV_BATTERY_LEVEL to "EV_BATTERY_LEVEL",
-            // ON_CHANGE, INT32 charge state enum, e.g. 3
-            VhalPropertyIds.EV_CHARGE_STATE to "EV_CHARGE_STATE",
-            // ON_CHANGE, FLOAT Wh, e.g. 18950.0
-            VhalPropertyIds.EV_CURRENT_BATTERY_CAPACITY to "EV_CURRENT_BATTERY_CAPACITY",
-            // CONTINUOUS max 2Hz, FLOAT meters, e.g. 110000.0
-            VhalPropertyIds.RANGE_REMAINING to "RANGE_REMAINING",
+            ObservedProperty(VhalPropertyIds.FUEL_LEVEL, "FUEL_LEVEL", SampleMode.Sampled(SAMPLE_30S)),
+            ObservedProperty(VhalPropertyIds.FUEL_LEVEL_LOW, "FUEL_LEVEL_LOW"),
+            ObservedProperty(VhalPropertyIds.EV_BATTERY_LEVEL, "EV_BATTERY_LEVEL", SampleMode.Sampled(SAMPLE_30S)),
+            // ✗ ObservedProperty(VhalPropertyIds.EV_CHARGE_STATE, "EV_CHARGE_STATE"),
+            // ✗ ObservedProperty(VhalPropertyIds.EV_CURRENT_BATTERY_CAPACITY, "EV_CURRENT_BATTERY_CAPACITY"),
+            ObservedProperty(VhalPropertyIds.RANGE_REMAINING, "RANGE_REMAINING", SampleMode.Sampled(SAMPLE_30S)),
 
             // ── Body / Exterior / Lights ──
-            // ON_CHANGE, BOOL, e.g. true
-            VhalPropertyIds.PARKING_BRAKE_ON to "PARKING_BRAKE_ON",
-            // ON_CHANGE, BOOL, DOOR area, e.g. true
-            VhalPropertyIds.DOOR_LOCK to "DOOR_LOCK",
-            // ON_CHANGE, INT32, WINDOW area, e.g. 0 (closed)
-            VhalPropertyIds.WINDOW_POS to "WINDOW_POS",
-            // ON_CHANGE, INT32 light state, e.g. 1 (ON)
-            VhalPropertyIds.HEADLIGHTS_STATE to "HEADLIGHTS_STATE",
-            // ON_CHANGE, INT32, e.g. 1
-            VhalPropertyIds.HIGH_BEAM_LIGHTS_STATE to "HIGH_BEAM_LIGHTS_STATE",
-            // ON_CHANGE, INT32, e.g. 1
-            VhalPropertyIds.HAZARD_LIGHTS_STATE to "HAZARD_LIGHTS_STATE",
-            // ON_CHANGE, INT32, e.g. 0 (OFF)
-            VhalPropertyIds.REAR_FOG_LIGHTS_STATE to "REAR_FOG_LIGHTS_STATE",
+            ObservedProperty(VhalPropertyIds.PARKING_BRAKE_ON, "PARKING_BRAKE_ON"),
+            // ✗ access denied on MIB4
+            // ObservedProperty(VhalPropertyIds.DOOR_LOCK, "DOOR_LOCK"),
+            // ObservedProperty(VhalPropertyIds.WINDOW_POS, "WINDOW_POS"),
+            ObservedProperty(VhalPropertyIds.HEADLIGHTS_STATE, "HEADLIGHTS_STATE"),
+            // ✗ ObservedProperty(VhalPropertyIds.HIGH_BEAM_LIGHTS_STATE, "HIGH_BEAM_LIGHTS_STATE"),
+            // ✗ ObservedProperty(VhalPropertyIds.HAZARD_LIGHTS_STATE, "HAZARD_LIGHTS_STATE"),
+            // ✗ ObservedProperty(VhalPropertyIds.REAR_FOG_LIGHTS_STATE, "REAR_FOG_LIGHTS_STATE"),
 
             // ── Cabin / Comfort / Safety ──
-            // CONTINUOUS max 2Hz, FLOAT WHEEL area kPa, e.g. 200.0
-            VhalPropertyIds.TIRE_PRESSURE to "TIRE_PRESSURE",
-            // CONTINUOUS max 2Hz, FLOAT °C, e.g. 23.0
-            VhalPropertyIds.ENV_OUTSIDE_TEMPERATURE to "ENV_OUTSIDE_TEMPERATURE",
-            // ON_CHANGE, INT32 GLOBAL 0-100, e.g. 100 (system-wide brightness)
-            VhalPropertyIds.DISPLAY_BRIGHTNESS to "DISPLAY_BRIGHTNESS",
-            // ON_CHANGE, INT32_VEC GLOBAL, per-display brightness levels, e.g. [0]
-            VhalPropertyIds.PER_DISPLAY_BRIGHTNESS to "PER_DISPLAY_BRIGHTNESS",
-            // ON_CHANGE, INT32 state, e.g. 0 (OFF)
-            VhalPropertyIds.CABIN_LIGHTS_STATE to "CABIN_LIGHTS_STATE",
-            // ON_CHANGE, BOOL SEAT area, e.g. false
-            VhalPropertyIds.SEAT_BELT_BUCKLED to "SEAT_BELT_BUCKLED",
-            // ON_CHANGE, INT32 SEAT area, e.g. 2 (OCCUPIED)
-            VhalPropertyIds.SEAT_OCCUPANCY to "SEAT_OCCUPANCY",
+            // ✗ ObservedProperty(VhalPropertyIds.TIRE_PRESSURE, "TIRE_PRESSURE", SampleMode.Sampled(SAMPLE_30S)),
+            ObservedProperty(VhalPropertyIds.ENV_OUTSIDE_TEMPERATURE, "ENV_OUTSIDE_TEMPERATURE", SampleMode.Sampled(SAMPLE_30S)),
+            // ✗ ObservedProperty(VhalPropertyIds.DISPLAY_BRIGHTNESS, "DISPLAY_BRIGHTNESS"),
+            // ✗ ObservedProperty(VhalPropertyIds.PER_DISPLAY_BRIGHTNESS, "PER_DISPLAY_BRIGHTNESS"),
+            // ✗ access denied on MIB4
+            // ObservedProperty(VhalPropertyIds.CABIN_LIGHTS_STATE, "CABIN_LIGHTS_STATE"),
+            // ✗ ObservedProperty(VhalPropertyIds.SEAT_BELT_BUCKLED, "SEAT_BELT_BUCKLED"),
+            // ✗ access denied on MIB4
+            // ObservedProperty(VhalPropertyIds.SEAT_OCCUPANCY, "SEAT_OCCUPANCY"),
 
-            // ── ADAS / Driver Monitoring (ON_CHANGE) ──
-            // INT32, e.g. 1 (ENABLED)
-            VhalPropertyIds.AUTOMATIC_EMERGENCY_BRAKING_STATE
-                to "AUTOMATIC_EMERGENCY_BRAKING_STATE",
-            // INT32, e.g. 1 (ENABLED)
-            VhalPropertyIds.FORWARD_COLLISION_WARNING_STATE
-                to "FORWARD_COLLISION_WARNING_STATE",
-            // INT32, e.g. 1 (ENABLED)
-            VhalPropertyIds.LANE_DEPARTURE_WARNING_STATE
-                to "LANE_DEPARTURE_WARNING_STATE",
-            // INT32, e.g. 0 (DISABLED)
-            VhalPropertyIds.LANE_KEEP_ASSIST_STATE to "LANE_KEEP_ASSIST_STATE",
-            // INT32, e.g. 0
-            VhalPropertyIds.EMERGENCY_LANE_KEEP_ASSIST_STATE
-                to "EMERGENCY_LANE_KEEP_ASSIST_STATE",
-            // INT32, e.g. 2 (driver hands state)
-            VhalPropertyIds.HANDS_ON_DETECTION_DRIVER_STATE
-                to "HANDS_ON_DETECTION_DRIVER_STATE",
-            // INT32, e.g. 1 (warning level)
-            VhalPropertyIds.HANDS_ON_DETECTION_WARNING
-                to "HANDS_ON_DETECTION_WARNING",
-            // INT32, e.g. 0
-            VhalPropertyIds.DRIVER_DROWSINESS_ATTENTION_STATE
-                to "DRIVER_DROWSINESS_ATTENTION_STATE",
-            // INT32, e.g. 0
-            VhalPropertyIds.DRIVER_DROWSINESS_ATTENTION_WARNING
-                to "DRIVER_DROWSINESS_ATTENTION_WARNING",
-            // INT32, e.g. 0
-            VhalPropertyIds.DRIVER_DISTRACTION_STATE
-                to "DRIVER_DISTRACTION_STATE",
-            // INT32, e.g. 0
-            VhalPropertyIds.DRIVER_DISTRACTION_WARNING
-                to "DRIVER_DISTRACTION_WARNING",
-            // INT32, e.g. 0
-            VhalPropertyIds.CROSS_TRAFFIC_MONITORING_WARNING_STATE
-                to "CROSS_TRAFFIC_MONITORING_WARNING_STATE",
-            // INT32, e.g. 0
-            VhalPropertyIds.LOW_SPEED_AUTOMATIC_EMERGENCY_BRAKING_STATE
-                to "LOW_SPEED_AUTOMATIC_EMERGENCY_BRAKING_STATE",
+            // ── ADAS / Driver Monitoring — all ✗ on MIB4 ──
+            // ✗ ObservedProperty(VhalPropertyIds.AUTOMATIC_EMERGENCY_BRAKING_STATE, "AUTOMATIC_EMERGENCY_BRAKING_STATE"),
+            // ✗ ObservedProperty(VhalPropertyIds.FORWARD_COLLISION_WARNING_STATE, "FORWARD_COLLISION_WARNING_STATE"),
+            // ✗ ObservedProperty(VhalPropertyIds.LANE_DEPARTURE_WARNING_STATE, "LANE_DEPARTURE_WARNING_STATE"),
+            // ✗ ObservedProperty(VhalPropertyIds.LANE_KEEP_ASSIST_STATE, "LANE_KEEP_ASSIST_STATE"),
+            // ✗ ObservedProperty(VhalPropertyIds.EMERGENCY_LANE_KEEP_ASSIST_STATE, "EMERGENCY_LANE_KEEP_ASSIST_STATE"),
+            // ✗ ObservedProperty(VhalPropertyIds.HANDS_ON_DETECTION_DRIVER_STATE, "HANDS_ON_DETECTION_DRIVER_STATE"),
+            // ✗ ObservedProperty(VhalPropertyIds.HANDS_ON_DETECTION_WARNING, "HANDS_ON_DETECTION_WARNING"),
+            // ✗ ObservedProperty(VhalPropertyIds.DRIVER_DROWSINESS_ATTENTION_STATE, "DRIVER_DROWSINESS_ATTENTION_STATE"),
+            // ✗ ObservedProperty(VhalPropertyIds.DRIVER_DROWSINESS_ATTENTION_WARNING, "DRIVER_DROWSINESS_ATTENTION_WARNING"),
+            // ✗ ObservedProperty(VhalPropertyIds.DRIVER_DISTRACTION_STATE, "DRIVER_DISTRACTION_STATE"),
+            // ✗ ObservedProperty(VhalPropertyIds.DRIVER_DISTRACTION_WARNING, "DRIVER_DISTRACTION_WARNING"),
+            // ✗ ObservedProperty(VhalPropertyIds.CROSS_TRAFFIC_MONITORING_WARNING_STATE, "CROSS_TRAFFIC_MONITORING_WARNING_STATE"),
+            // ✗ ObservedProperty(VhalPropertyIds.LOW_SPEED_AUTOMATIC_EMERGENCY_BRAKING_STATE, "LOW_SPEED_AUTOMATIC_EMERGENCY_BRAKING_STATE"),
 
-            // ── System / Power / Time (ON_CHANGE unless noted) ──
-            // INT32_VEC, power state request, e.g. [0,0]
-            VhalPropertyIds.AP_POWER_STATE_REQ to "AP_POWER_STATE_REQ",
-            // INT32_VEC [RW], power state report, e.g. [1,0]
-            VhalPropertyIds.AP_POWER_STATE_REPORT to "AP_POWER_STATE_REPORT",
-            // INT64, epoch ms, e.g. 1778479041000
-            VhalPropertyIds.EXTERNAL_CAR_TIME to "EXTERNAL_CAR_TIME",
-            // INT32, e.g. 145 (KM_PER_HOUR)
-            VhalPropertyIds.VEHICLE_SPEED_DISPLAY_UNITS
-                to "VEHICLE_SPEED_DISPLAY_UNITS",
-            // INT32, e.g. 35
-            VhalPropertyIds.DISTANCE_DISPLAY_UNITS to "DISTANCE_DISPLAY_UNITS",
-            // INT32 STATIC, e.g. 100000 (grams)
-            VhalPropertyIds.VEHICLE_CURB_WEIGHT to "VEHICLE_CURB_WEIGHT",
+            // ── System / Power / Time ──
+            // ✗ access denied on MIB4
+            // ObservedProperty(VhalPropertyIds.AP_POWER_STATE_REQ, "AP_POWER_STATE_REQ"),
+            // ✗ ObservedProperty(VhalPropertyIds.AP_POWER_STATE_REPORT, "AP_POWER_STATE_REPORT"),
+            // ✗ ObservedProperty(VhalPropertyIds.EXTERNAL_CAR_TIME, "EXTERNAL_CAR_TIME"),
+            // ✗ access denied on MIB4
+            // ObservedProperty(VhalPropertyIds.VEHICLE_SPEED_DISPLAY_UNITS, "VEHICLE_SPEED_DISPLAY_UNITS"),
+            // ✗ ObservedProperty(VhalPropertyIds.DISTANCE_DISPLAY_UNITS, "DISTANCE_DISPLAY_UNITS"),
+            // ✗ ObservedProperty(VhalPropertyIds.VEHICLE_CURB_WEIGHT, "VEHICLE_CURB_WEIGHT"),
 
-            // ── HVAC / Climate (real HW only, gracefully skipped on emulator) ──
-            // ON_CHANGE, INT32 SEAT area, fan level
-            VhalPropertyIds.HVAC_FAN_SPEED to "HVAC_FAN_SPEED",
-            // ON_CHANGE, INT32 SEAT area
-            VhalPropertyIds.HVAC_FAN_DIRECTION to "HVAC_FAN_DIRECTION",
-            // ON_CHANGE, INT32 SEAT area
-            VhalPropertyIds.HVAC_FAN_DIRECTION_AVAILABLE
-                to "HVAC_FAN_DIRECTION_AVAILABLE",
-            // ON_CHANGE, INT32 SEAT area, rpm
-            VhalPropertyIds.HVAC_ACTUAL_FAN_SPEED_RPM
-                to "HVAC_ACTUAL_FAN_SPEED_RPM",
-            // ON_CHANGE, FLOAT SEAT area, °C
-            VhalPropertyIds.HVAC_TEMPERATURE_SET to "HVAC_TEMPERATURE_SET",
-            // ON_CHANGE, FLOAT SEAT area, °C
-            VhalPropertyIds.HVAC_TEMPERATURE_CURRENT
-                to "HVAC_TEMPERATURE_CURRENT",
-            // ON_CHANGE, BOOL SEAT area
-            VhalPropertyIds.HVAC_AC_ON to "HVAC_AC_ON",
-            // ON_CHANGE, BOOL SEAT area
-            VhalPropertyIds.HVAC_MAX_AC_ON to "HVAC_MAX_AC_ON",
-            // ON_CHANGE, BOOL WINDOW area
-            VhalPropertyIds.HVAC_DEFROSTER to "HVAC_DEFROSTER",
-            // ON_CHANGE, BOOL WINDOW area
-            VhalPropertyIds.HVAC_ELECTRIC_DEFROSTER_ON
-                to "HVAC_ELECTRIC_DEFROSTER_ON",
-            // ON_CHANGE, BOOL GLOBAL
-            VhalPropertyIds.HVAC_MAX_DEFROST_ON to "HVAC_MAX_DEFROST_ON",
-            // ON_CHANGE, BOOL SEAT area
-            VhalPropertyIds.HVAC_RECIRC_ON to "HVAC_RECIRC_ON",
-            // ON_CHANGE, BOOL SEAT area
-            VhalPropertyIds.HVAC_AUTO_RECIRC_ON to "HVAC_AUTO_RECIRC_ON",
-            // ON_CHANGE, BOOL SEAT area
-            VhalPropertyIds.HVAC_DUAL_ON to "HVAC_DUAL_ON",
-            // ON_CHANGE, BOOL SEAT area — emulator ✓
-            VhalPropertyIds.HVAC_AUTO_ON to "HVAC_AUTO_ON",
-            // ON_CHANGE, BOOL SEAT area
-            VhalPropertyIds.HVAC_POWER_ON to "HVAC_POWER_ON",
-            // ON_CHANGE, INT32 SEAT area, level
-            VhalPropertyIds.HVAC_SEAT_TEMPERATURE to "HVAC_SEAT_TEMPERATURE",
-            // ON_CHANGE, INT32 SEAT area, level
-            VhalPropertyIds.HVAC_SEAT_VENTILATION to "HVAC_SEAT_VENTILATION",
-            // ON_CHANGE, INT32 GLOBAL, level
-            VhalPropertyIds.HVAC_STEERING_WHEEL_HEAT
-                to "HVAC_STEERING_WHEEL_HEAT",
-            // ON_CHANGE, BOOL GLOBAL
-            VhalPropertyIds.HVAC_SIDE_MIRROR_HEAT to "HVAC_SIDE_MIRROR_HEAT",
-            // ON_CHANGE, INT32, e.g. 48 (CELSIUS) — emulator ✓
-            VhalPropertyIds.HVAC_TEMPERATURE_DISPLAY_UNITS
-                to "HVAC_TEMPERATURE_DISPLAY_UNITS",
-            // ON_CHANGE, FLOAT_VEC — emulator ✓
-            VhalPropertyIds.HVAC_TEMPERATURE_VALUE_SUGGESTION
-                to "HVAC_TEMPERATURE_VALUE_SUGGESTION",
+            // ── HVAC / Climate (only 3 available on MIB4) ──
+            // ✗ ObservedProperty(VhalPropertyIds.HVAC_FAN_SPEED, "HVAC_FAN_SPEED"),
+            // ✗ ObservedProperty(VhalPropertyIds.HVAC_FAN_DIRECTION, "HVAC_FAN_DIRECTION"),
+            // ✗ ObservedProperty(VhalPropertyIds.HVAC_FAN_DIRECTION_AVAILABLE, "HVAC_FAN_DIRECTION_AVAILABLE"),
+            // ✗ ObservedProperty(VhalPropertyIds.HVAC_ACTUAL_FAN_SPEED_RPM, "HVAC_ACTUAL_FAN_SPEED_RPM"),
+            // ✗ ObservedProperty(VhalPropertyIds.HVAC_TEMPERATURE_SET, "HVAC_TEMPERATURE_SET"),
+            // ✗ ObservedProperty(VhalPropertyIds.HVAC_TEMPERATURE_CURRENT, "HVAC_TEMPERATURE_CURRENT"),
+            // ✗ ObservedProperty(VhalPropertyIds.HVAC_AC_ON, "HVAC_AC_ON"),
+            // ✗ ObservedProperty(VhalPropertyIds.HVAC_MAX_AC_ON, "HVAC_MAX_AC_ON"),
+            // ✗ ObservedProperty(VhalPropertyIds.HVAC_DEFROSTER, "HVAC_DEFROSTER"),
+            // ✗ ObservedProperty(VhalPropertyIds.HVAC_ELECTRIC_DEFROSTER_ON, "HVAC_ELECTRIC_DEFROSTER_ON"),
+            // ✗ ObservedProperty(VhalPropertyIds.HVAC_MAX_DEFROST_ON, "HVAC_MAX_DEFROST_ON"),
+            // ✗ ObservedProperty(VhalPropertyIds.HVAC_RECIRC_ON, "HVAC_RECIRC_ON"),
+            // ✗ access denied on MIB4
+            // ObservedProperty(VhalPropertyIds.HVAC_AUTO_RECIRC_ON, "HVAC_AUTO_RECIRC_ON"),
+            // ✗ ObservedProperty(VhalPropertyIds.HVAC_DUAL_ON, "HVAC_DUAL_ON"),
+            // ✗ ObservedProperty(VhalPropertyIds.HVAC_AUTO_ON, "HVAC_AUTO_ON"),
+            // ✗ ObservedProperty(VhalPropertyIds.HVAC_POWER_ON, "HVAC_POWER_ON"),
+            // ✗ ObservedProperty(VhalPropertyIds.HVAC_SEAT_TEMPERATURE, "HVAC_SEAT_TEMPERATURE"),
+            // ✗ ObservedProperty(VhalPropertyIds.HVAC_SEAT_VENTILATION, "HVAC_SEAT_VENTILATION"),
+            // ✗ access denied on MIB4
+            // ObservedProperty(VhalPropertyIds.HVAC_STEERING_WHEEL_HEAT, "HVAC_STEERING_WHEEL_HEAT"),
+            // ✗ ObservedProperty(VhalPropertyIds.HVAC_SIDE_MIRROR_HEAT, "HVAC_SIDE_MIRROR_HEAT"),
+            ObservedProperty(VhalPropertyIds.HVAC_TEMPERATURE_DISPLAY_UNITS, "HVAC_TEMPERATURE_DISPLAY_UNITS"),
+            // ✗ ObservedProperty(VhalPropertyIds.HVAC_TEMPERATURE_VALUE_SUGGESTION, "HVAC_TEMPERATURE_VALUE_SUGGESTION"),
 
-            // ── Porsche Vendor (ON_CHANGE, gracefully skipped if unavailable) ──
-            // INT32, power clamps state, e.g. 1
-            VhalPropertyIds.PORSCHE_CLAMPS_STATE to "PORSCHE_CLAMPS_STATE",
-            // BOOL, system shutdown requested
-            VhalPropertyIds.PORSCHE_SHUTDOWN_FLAG to "PORSCHE_SHUTDOWN_FLAG",
-            // BOOL, cluster dark/night mode, e.g. true
-            VhalPropertyIds.PORSCHE_CLUSTER_NIGHT_MODE
-                to "PORSCHE_CLUSTER_NIGHT_MODE",
-            // INT32, wakeup reason enum, e.g. 1
-            VhalPropertyIds.PORSCHE_WAKE_UP_REASON to "PORSCHE_WAKE_UP_REASON",
-            // INT32, battery/energy warning, e.g. 0
-            VhalPropertyIds.PORSCHE_BEM_WARNING to "PORSCHE_BEM_WARNING",
-            // STRING, mobile network provider name
-            VhalPropertyIds.PORSCHE_NETWORK_PROVIDER
-                to "PORSCHE_NETWORK_PROVIDER",
-            // STRING, connection type, e.g. "4.5G"
-            VhalPropertyIds.PORSCHE_NETWORK_TYPE to "PORSCHE_NETWORK_TYPE",
-            // INT32, signal quality 0-5, e.g. 3
-            VhalPropertyIds.PORSCHE_NETWORK_SIGNAL_QUALITY
-                to "PORSCHE_NETWORK_SIGNAL_QUALITY",
-            // FLOAT, EV range in km, e.g. 189.5
-            VhalPropertyIds.PORSCHE_EV_ENERGY_RANGE
-                to "PORSCHE_EV_ENERGY_RANGE",
-            // FLOAT, primary range in km, e.g. 110.0
-            VhalPropertyIds.PORSCHE_EV_CURRENT_RANGES_PRIMARY
-                to "PORSCHE_EV_CURRENT_RANGES_PRIMARY",
+            // ── Porsche Vendor ──
+            ObservedProperty(VhalPropertyIds.PORSCHE_CLAMPS_STATE, "PORSCHE_CLAMPS_STATE"),
+            ObservedProperty(VhalPropertyIds.PORSCHE_SHUTDOWN_FLAG, "PORSCHE_SHUTDOWN_FLAG"),
+            ObservedProperty(VhalPropertyIds.PORSCHE_CLUSTER_NIGHT_MODE, "PORSCHE_CLUSTER_NIGHT_MODE"),
+            ObservedProperty(VhalPropertyIds.PORSCHE_WAKE_UP_REASON, "PORSCHE_WAKE_UP_REASON"),
+            ObservedProperty(VhalPropertyIds.PORSCHE_BEM_WARNING, "PORSCHE_BEM_WARNING"),
+            ObservedProperty(VhalPropertyIds.PORSCHE_NETWORK_PROVIDER, "PORSCHE_NETWORK_PROVIDER"),
+            ObservedProperty(VhalPropertyIds.PORSCHE_NETWORK_TYPE, "PORSCHE_NETWORK_TYPE"),
+            ObservedProperty(VhalPropertyIds.PORSCHE_NETWORK_SIGNAL_QUALITY, "PORSCHE_NETWORK_SIGNAL_QUALITY"),
+            ObservedProperty(VhalPropertyIds.PORSCHE_EV_ENERGY_RANGE, "PORSCHE_EV_ENERGY_RANGE"),
+            ObservedProperty(VhalPropertyIds.PORSCHE_EV_CURRENT_RANGES_PRIMARY, "PORSCHE_EV_CURRENT_RANGES_PRIMARY"),
 
-            // ── Porsche Diagnostics (STATIC / ON_CHANGE) ──
-            // INT32 STATIC, car class enum, e.g. 5
-            VhalPropertyIds.PORSCHE_DIAG_CAR_CLASS to "PORSCHE_DIAG_CAR_CLASS",
-            // INT32 STATIC, body style enum, e.g. 3
-            VhalPropertyIds.PORSCHE_DIAG_CAR_BODYSTYLE
-                to "PORSCHE_DIAG_CAR_BODYSTYLE",
-            // STRING, full variant code, e.g. "FM3-P-S-101-NDCWB6-EU-PO-ML2-DE"
-            VhalPropertyIds.PORSCHE_DIAG_VARIANT_STRING
-                to "PORSCHE_DIAG_VARIANT_STRING",
-            // STRING, SW version, e.g. "X047"
-            VhalPropertyIds.PORSCHE_DIAG_SOFTWARE_VERSION
-                to "PORSCHE_DIAG_SOFTWARE_VERSION",
-            // STRING [RW], HMI country code, e.g. "DE"
-            VhalPropertyIds.PORSCHE_DIAG_COUNTRY_CODE_HMI
-                to "PORSCHE_DIAG_COUNTRY_CODE_HMI",
-            // INT32 [RW], MMTR availability flag, e.g. 1
-            VhalPropertyIds.PORSCHE_DIAG_MMTR_AVAILABLE
-                to "PORSCHE_DIAG_MMTR_AVAILABLE",
+            // ── Porsche Diagnostics ──
+            ObservedProperty(VhalPropertyIds.PORSCHE_DIAG_CAR_CLASS, "PORSCHE_DIAG_CAR_CLASS"),
+            ObservedProperty(VhalPropertyIds.PORSCHE_DIAG_CAR_BODYSTYLE, "PORSCHE_DIAG_CAR_BODYSTYLE"),
+            ObservedProperty(VhalPropertyIds.PORSCHE_DIAG_VARIANT_STRING, "PORSCHE_DIAG_VARIANT_STRING"),
+            ObservedProperty(VhalPropertyIds.PORSCHE_DIAG_SOFTWARE_VERSION, "PORSCHE_DIAG_SOFTWARE_VERSION"),
+            ObservedProperty(VhalPropertyIds.PORSCHE_DIAG_COUNTRY_CODE_HMI, "PORSCHE_DIAG_COUNTRY_CODE_HMI"),
+            ObservedProperty(VhalPropertyIds.PORSCHE_DIAG_MMTR_AVAILABLE, "PORSCHE_DIAG_MMTR_AVAILABLE"),
 
-            // ── Porsche Telephony (ON_CHANGE) ──
-            // INT32, call state enum
-            VhalPropertyIds.PORSCHE_CALL_STATE to "PORSCHE_CALL_STATE",
-            // INT32 [RW], Android call state
-            VhalPropertyIds.PORSCHE_ANDROID_CALL_STATE
-                to "PORSCHE_ANDROID_CALL_STATE",
-            // INT32_VEC [RW], telephony subsystem states
-            VhalPropertyIds.INT_TELEPHONY_STATE to "INT_TELEPHONY_STATE",
+            // ── Porsche Telephony ──
+            ObservedProperty(VhalPropertyIds.PORSCHE_CALL_STATE, "PORSCHE_CALL_STATE"),
+            ObservedProperty(VhalPropertyIds.PORSCHE_ANDROID_CALL_STATE, "PORSCHE_ANDROID_CALL_STATE"),
+            ObservedProperty(VhalPropertyIds.INT_TELEPHONY_STATE, "INT_TELEPHONY_STATE"),
         )
     }
 }
