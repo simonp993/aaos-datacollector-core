@@ -309,9 +309,9 @@ class VehiclePropertyCollector @Inject constructor(
             // ObservedProperty(VhalPropertyIds.ENGINE_RPM, "ENGINE_RPM", SampleMode.Sampled(SAMPLE_5S)),
             // ObservedProperty(VhalPropertyIds.ENGINE_OIL_LEVEL, "ENGINE_OIL_LEVEL"),
             // ObservedProperty(VhalPropertyIds.ENGINE_OIL_TEMP, "ENGINE_OIL_TEMP", SampleMode.Sampled(SAMPLE_30S)),
-            ObservedProperty(VhalPropertyIds.GEAR_SELECTION, "GEAR_SELECTION"),
-            ObservedProperty(VhalPropertyIds.CURRENT_GEAR, "CURRENT_GEAR"),
-            ObservedProperty(VhalPropertyIds.IGNITION_STATE, "IGNITION_STATE"),
+            ObservedProperty(VhalPropertyIds.GEAR_SELECTION, "GEAR_SELECTION"), // redundant with CURRENT_GEAR but included for completeness
+            ObservedProperty(VhalPropertyIds.CURRENT_GEAR, "CURRENT_GEAR"), // 8 = D, 1 = N, 2 = R, 4 = P
+            ObservedProperty(VhalPropertyIds.IGNITION_STATE, "IGNITION_STATE"), // 4 = On, 3 = Off
 
             // ── Fuel / EV / Range ──
             ObservedProperty(VhalPropertyIds.FUEL_LEVEL, "FUEL_LEVEL", SampleMode.Sampled(SAMPLE_30S)),
