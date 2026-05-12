@@ -12,6 +12,13 @@ Before Weekend Drive
 
 - make sure operatorName in SignalStrenght cellular contains a string an not only ""
 
+- Network: Key 5G Signal Metrics
+Is 5G differentiation possible? 
+RSRP (Reference Signal Received Power - dBm): Measures the signal strength from a single cell base station. This is the most crucial metric for gauging coverage.
+SINR (Signal to Interference plus Noise Ratio - dB): Measures the clarity of the signal compared to background noise and interference. A higher SINR determines higher modulation (like 1024-QAM) and faster speeds.
+RSRQ (Reference Signal Received Quality - dB): Indicates the overall quality of the received signal, heavily influenced by network load and interference.
+RSSI (Received Signal Strength Indicator - dBm): The total received power, including desired signal, interference, and noise
+
 - [ ] CarWatchdogManager collector — monitor system health: unresponsive services, resource overuse notifications, I/O overuse stats. Guaranteed API. --> Do we get app crashes? 
 
 - [ ] CPUCollector — `/proc/stat` read fails with EACCES (SELinux denies even system-priv on AAOS 15). Needs alternative: `dumpsys cpuinfo`, `top -bn1`, or own-process `/proc/self/stat`.
