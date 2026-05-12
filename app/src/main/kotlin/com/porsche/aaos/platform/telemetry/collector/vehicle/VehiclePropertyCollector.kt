@@ -299,12 +299,15 @@ class VehiclePropertyCollector @Inject constructor(
 
         // Verified against MIB4 Cayenne (2026-05-12) via:
         //   adb shell cmd car_service get-carpropertyconfig
-        // ✓ = available on device, ✗ = not registered in VHAL
+        // Properties not registered in VHAL have been removed entirely.
+        // Properties marked "access denied" are registered but require
+        // platform-key signing — will work once the APK is signed correctly.
         private val OBSERVED_PROPERTIES = listOf(
             // ── Driving / Powertrain ──
             ObservedProperty(VhalPropertyIds.PERF_VEHICLE_SPEED, "PERF_VEHICLE_SPEED", SampleMode.Sampled(SAMPLE_5S)),
-            // ✗ access denied on MIB4 (permission not granted despite manifest declaration)
+            // access denied — needs CAR_MILEAGE (signature-level)
             // ObservedProperty(VhalPropertyIds.PERF_ODOMETER, "PERF_ODOMETER", SampleMode.Sampled(SAMPLE_30S)),
+            // access denied — needs CAR_ENGINE_DETAILED (signature-level)
             // ObservedProperty(VhalPropertyIds.PERF_STEERING_ANGLE, "PERF_STEERING_ANGLE", SampleMode.Sampled(SAMPLE_5S)),
             // ObservedProperty(VhalPropertyIds.ENGINE_RPM, "ENGINE_RPM", SampleMode.Sampled(SAMPLE_5S)),
             // ObservedProperty(VhalPropertyIds.ENGINE_OIL_LEVEL, "ENGINE_OIL_LEVEL"),
@@ -317,81 +320,34 @@ class VehiclePropertyCollector @Inject constructor(
             ObservedProperty(VhalPropertyIds.FUEL_LEVEL, "FUEL_LEVEL", SampleMode.Sampled(SAMPLE_30S)),
             ObservedProperty(VhalPropertyIds.FUEL_LEVEL_LOW, "FUEL_LEVEL_LOW"),
             ObservedProperty(VhalPropertyIds.EV_BATTERY_LEVEL, "EV_BATTERY_LEVEL", SampleMode.Sampled(SAMPLE_30S)),
-            // ✗ ObservedProperty(VhalPropertyIds.EV_CHARGE_STATE, "EV_CHARGE_STATE"),
-            // ✗ ObservedProperty(VhalPropertyIds.EV_CURRENT_BATTERY_CAPACITY, "EV_CURRENT_BATTERY_CAPACITY"),
             ObservedProperty(VhalPropertyIds.RANGE_REMAINING, "RANGE_REMAINING", SampleMode.Sampled(SAMPLE_30S)),
 
             // ── Body / Exterior / Lights ──
             ObservedProperty(VhalPropertyIds.PARKING_BRAKE_ON, "PARKING_BRAKE_ON"),
-            // ✗ access denied on MIB4
+            // access denied — needs CONTROL_CAR_DOORS (signature-level)
             // ObservedProperty(VhalPropertyIds.DOOR_LOCK, "DOOR_LOCK"),
+            // access denied — needs CONTROL_CAR_WINDOWS (signature-level)
             // ObservedProperty(VhalPropertyIds.WINDOW_POS, "WINDOW_POS"),
             ObservedProperty(VhalPropertyIds.HEADLIGHTS_STATE, "HEADLIGHTS_STATE"),
-            // ✗ ObservedProperty(VhalPropertyIds.HIGH_BEAM_LIGHTS_STATE, "HIGH_BEAM_LIGHTS_STATE"),
-            // ✗ ObservedProperty(VhalPropertyIds.HAZARD_LIGHTS_STATE, "HAZARD_LIGHTS_STATE"),
-            // ✗ ObservedProperty(VhalPropertyIds.REAR_FOG_LIGHTS_STATE, "REAR_FOG_LIGHTS_STATE"),
 
             // ── Cabin / Comfort / Safety ──
-            // ✗ ObservedProperty(VhalPropertyIds.TIRE_PRESSURE, "TIRE_PRESSURE", SampleMode.Sampled(SAMPLE_30S)),
             ObservedProperty(VhalPropertyIds.ENV_OUTSIDE_TEMPERATURE, "ENV_OUTSIDE_TEMPERATURE", SampleMode.Sampled(SAMPLE_30S)),
-            // ✗ ObservedProperty(VhalPropertyIds.DISPLAY_BRIGHTNESS, "DISPLAY_BRIGHTNESS"),
-            // ✗ ObservedProperty(VhalPropertyIds.PER_DISPLAY_BRIGHTNESS, "PER_DISPLAY_BRIGHTNESS"),
-            // ✗ access denied on MIB4
+            // access denied — needs CAR_INTERIOR_LIGHTING (signature-level)
             // ObservedProperty(VhalPropertyIds.CABIN_LIGHTS_STATE, "CABIN_LIGHTS_STATE"),
-            // ✗ ObservedProperty(VhalPropertyIds.SEAT_BELT_BUCKLED, "SEAT_BELT_BUCKLED"),
-            // ✗ access denied on MIB4
+            // access denied — needs READ_CAR_OCCUPANT_AWARENESS_STATE (signature-level)
             // ObservedProperty(VhalPropertyIds.SEAT_OCCUPANCY, "SEAT_OCCUPANCY"),
 
-            // ── ADAS / Driver Monitoring — all ✗ on MIB4 ──
-            // ✗ ObservedProperty(VhalPropertyIds.AUTOMATIC_EMERGENCY_BRAKING_STATE, "AUTOMATIC_EMERGENCY_BRAKING_STATE"),
-            // ✗ ObservedProperty(VhalPropertyIds.FORWARD_COLLISION_WARNING_STATE, "FORWARD_COLLISION_WARNING_STATE"),
-            // ✗ ObservedProperty(VhalPropertyIds.LANE_DEPARTURE_WARNING_STATE, "LANE_DEPARTURE_WARNING_STATE"),
-            // ✗ ObservedProperty(VhalPropertyIds.LANE_KEEP_ASSIST_STATE, "LANE_KEEP_ASSIST_STATE"),
-            // ✗ ObservedProperty(VhalPropertyIds.EMERGENCY_LANE_KEEP_ASSIST_STATE, "EMERGENCY_LANE_KEEP_ASSIST_STATE"),
-            // ✗ ObservedProperty(VhalPropertyIds.HANDS_ON_DETECTION_DRIVER_STATE, "HANDS_ON_DETECTION_DRIVER_STATE"),
-            // ✗ ObservedProperty(VhalPropertyIds.HANDS_ON_DETECTION_WARNING, "HANDS_ON_DETECTION_WARNING"),
-            // ✗ ObservedProperty(VhalPropertyIds.DRIVER_DROWSINESS_ATTENTION_STATE, "DRIVER_DROWSINESS_ATTENTION_STATE"),
-            // ✗ ObservedProperty(VhalPropertyIds.DRIVER_DROWSINESS_ATTENTION_WARNING, "DRIVER_DROWSINESS_ATTENTION_WARNING"),
-            // ✗ ObservedProperty(VhalPropertyIds.DRIVER_DISTRACTION_STATE, "DRIVER_DISTRACTION_STATE"),
-            // ✗ ObservedProperty(VhalPropertyIds.DRIVER_DISTRACTION_WARNING, "DRIVER_DISTRACTION_WARNING"),
-            // ✗ ObservedProperty(VhalPropertyIds.CROSS_TRAFFIC_MONITORING_WARNING_STATE, "CROSS_TRAFFIC_MONITORING_WARNING_STATE"),
-            // ✗ ObservedProperty(VhalPropertyIds.LOW_SPEED_AUTOMATIC_EMERGENCY_BRAKING_STATE, "LOW_SPEED_AUTOMATIC_EMERGENCY_BRAKING_STATE"),
-
             // ── System / Power / Time ──
-            // ✗ access denied on MIB4
+            // access denied — needs CAR_POWER (signature-level)
             // ObservedProperty(VhalPropertyIds.AP_POWER_STATE_REQ, "AP_POWER_STATE_REQ"),
-            // ✗ ObservedProperty(VhalPropertyIds.AP_POWER_STATE_REPORT, "AP_POWER_STATE_REPORT"),
-            // ✗ ObservedProperty(VhalPropertyIds.EXTERNAL_CAR_TIME, "EXTERNAL_CAR_TIME"),
-            // ✗ access denied on MIB4
+            // access denied — needs READ_CAR_DISPLAY_UNITS (signature-level)
             // ObservedProperty(VhalPropertyIds.VEHICLE_SPEED_DISPLAY_UNITS, "VEHICLE_SPEED_DISPLAY_UNITS"),
-            // ✗ ObservedProperty(VhalPropertyIds.DISTANCE_DISPLAY_UNITS, "DISTANCE_DISPLAY_UNITS"),
-            // ✗ ObservedProperty(VhalPropertyIds.VEHICLE_CURB_WEIGHT, "VEHICLE_CURB_WEIGHT"),
 
-            // ── HVAC / Climate (only 3 available on MIB4) ──
-            // ✗ ObservedProperty(VhalPropertyIds.HVAC_FAN_SPEED, "HVAC_FAN_SPEED"),
-            // ✗ ObservedProperty(VhalPropertyIds.HVAC_FAN_DIRECTION, "HVAC_FAN_DIRECTION"),
-            // ✗ ObservedProperty(VhalPropertyIds.HVAC_FAN_DIRECTION_AVAILABLE, "HVAC_FAN_DIRECTION_AVAILABLE"),
-            // ✗ ObservedProperty(VhalPropertyIds.HVAC_ACTUAL_FAN_SPEED_RPM, "HVAC_ACTUAL_FAN_SPEED_RPM"),
-            // ✗ ObservedProperty(VhalPropertyIds.HVAC_TEMPERATURE_SET, "HVAC_TEMPERATURE_SET"),
-            // ✗ ObservedProperty(VhalPropertyIds.HVAC_TEMPERATURE_CURRENT, "HVAC_TEMPERATURE_CURRENT"),
-            // ✗ ObservedProperty(VhalPropertyIds.HVAC_AC_ON, "HVAC_AC_ON"),
-            // ✗ ObservedProperty(VhalPropertyIds.HVAC_MAX_AC_ON, "HVAC_MAX_AC_ON"),
-            // ✗ ObservedProperty(VhalPropertyIds.HVAC_DEFROSTER, "HVAC_DEFROSTER"),
-            // ✗ ObservedProperty(VhalPropertyIds.HVAC_ELECTRIC_DEFROSTER_ON, "HVAC_ELECTRIC_DEFROSTER_ON"),
-            // ✗ ObservedProperty(VhalPropertyIds.HVAC_MAX_DEFROST_ON, "HVAC_MAX_DEFROST_ON"),
-            // ✗ ObservedProperty(VhalPropertyIds.HVAC_RECIRC_ON, "HVAC_RECIRC_ON"),
-            // ✗ access denied on MIB4
+            // ── HVAC / Climate ──
+            // access denied — needs CONTROL_CAR_CLIMATE (signature-level)
             // ObservedProperty(VhalPropertyIds.HVAC_AUTO_RECIRC_ON, "HVAC_AUTO_RECIRC_ON"),
-            // ✗ ObservedProperty(VhalPropertyIds.HVAC_DUAL_ON, "HVAC_DUAL_ON"),
-            // ✗ ObservedProperty(VhalPropertyIds.HVAC_AUTO_ON, "HVAC_AUTO_ON"),
-            // ✗ ObservedProperty(VhalPropertyIds.HVAC_POWER_ON, "HVAC_POWER_ON"),
-            // ✗ ObservedProperty(VhalPropertyIds.HVAC_SEAT_TEMPERATURE, "HVAC_SEAT_TEMPERATURE"),
-            // ✗ ObservedProperty(VhalPropertyIds.HVAC_SEAT_VENTILATION, "HVAC_SEAT_VENTILATION"),
-            // ✗ access denied on MIB4
             // ObservedProperty(VhalPropertyIds.HVAC_STEERING_WHEEL_HEAT, "HVAC_STEERING_WHEEL_HEAT"),
-            // ✗ ObservedProperty(VhalPropertyIds.HVAC_SIDE_MIRROR_HEAT, "HVAC_SIDE_MIRROR_HEAT"),
             ObservedProperty(VhalPropertyIds.HVAC_TEMPERATURE_DISPLAY_UNITS, "HVAC_TEMPERATURE_DISPLAY_UNITS"),
-            // ✗ ObservedProperty(VhalPropertyIds.HVAC_TEMPERATURE_VALUE_SUGGESTION, "HVAC_TEMPERATURE_VALUE_SUGGESTION"),
 
             // ── Porsche Vendor ──
             ObservedProperty(VhalPropertyIds.PORSCHE_CLAMPS_STATE, "PORSCHE_CLAMPS_STATE"),
