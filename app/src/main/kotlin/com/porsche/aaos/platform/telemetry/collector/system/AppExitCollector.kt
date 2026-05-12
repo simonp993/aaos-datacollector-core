@@ -3,6 +3,7 @@ package com.porsche.aaos.platform.telemetry.collector.system
 import android.app.ActivityManager
 import android.app.ApplicationExitInfo
 import android.content.Context
+import android.os.UserHandle
 import com.porsche.aaos.platform.telemetry.collector.Collector
 import com.porsche.aaos.platform.telemetry.core.logging.Logger
 import com.porsche.aaos.platform.telemetry.telemetry.Telemetry
@@ -32,8 +33,9 @@ class AppExitCollector @Inject constructor(
     @Volatile
     private var running = false
 
-    // Watermark: only report exits newer than this timestamp
-    private var lastSeenTimestamp = 0L
+    // Watermark per user: only report exits newer than this timestamp
+    private val lastSeenTimestampByUser = mutableMapOf<Int, Long>()
+    private var userIds: List<Int> = listOf(0)
 
     override suspend fun start() {
         running = true
@@ -41,13 +43,19 @@ class AppExitCollector @Inject constructor(
 
         delay(STAGGER_DELAY_MS)
 
-        // Seed watermark to avoid replaying entire history on first run
-        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-        seedWatermark(am)
+        // Seed watermarks for currently known users
+        val initialUsers = discoverUserIds()
+        logger.i(TAG, "Initial users for app-exit monitoring: $initialUsers")
+        initialUsers.forEach { userId ->
+            val userAm = activityManagerForUser(userId)
+            seedWatermark(userAm, userId)
+        }
 
         while (running && coroutineContext.isActive) {
             delay(POLL_INTERVAL_MS)
-            collectExits(am)
+            // Re-discover users each cycle to catch added/removed users
+            userIds = discoverUserIds()
+            collectExitsAllUsers()
         }
     }
 
@@ -57,25 +65,38 @@ class AppExitCollector @Inject constructor(
     }
 
     @Suppress("TooGenericExceptionCaught")
-    private fun seedWatermark(am: ActivityManager) {
+    private fun seedWatermark(am: ActivityManager, userId: Int) {
         try {
             val recent = am.getHistoricalProcessExitReasons(null, 0, 1)
             if (recent.isNotEmpty()) {
-                lastSeenTimestamp = recent[0].timestamp
+                lastSeenTimestampByUser[userId] = recent[0].timestamp
             }
         } catch (e: Exception) {
-            logger.e(TAG, "Failed to seed watermark: ${e.message}")
+            logger.e(TAG, "Failed to seed watermark for user $userId: ${e.message}")
+        }
+    }
+
+    private fun collectExitsAllUsers() {
+        userIds.forEach { userId ->
+            // Seed watermark for newly discovered users to avoid replaying their full history
+            if (userId !in lastSeenTimestampByUser) {
+                seedWatermark(activityManagerForUser(userId), userId)
+                return@forEach
+            }
+            val userAm = activityManagerForUser(userId)
+            collectExitsForUser(userAm, userId)
         }
     }
 
     @Suppress("TooGenericExceptionCaught")
-    private fun collectExits(am: ActivityManager) {
+    private fun collectExitsForUser(am: ActivityManager, userId: Int) {
         try {
+            val watermark = lastSeenTimestampByUser[userId] ?: 0L
             val exits = am.getHistoricalProcessExitReasons(null, 0, MAX_RESULTS)
-            val newExits = exits.filter { it.timestamp > lastSeenTimestamp }
+            val newExits = exits.filter { it.timestamp > watermark }
             if (newExits.isEmpty()) return
 
-            lastSeenTimestamp = newExits.maxOf { it.timestamp }
+            lastSeenTimestampByUser[userId] = newExits.maxOf { it.timestamp }
 
             val exitRecords = newExits.map { info ->
                 mapOf(
@@ -107,9 +128,83 @@ class AppExitCollector @Inject constructor(
                 ),
             )
 
-            logger.d(TAG, "Reported ${exitRecords.size} new app exits")
+            logger.d(TAG, "Reported ${exitRecords.size} new app exits for user $userId")
         } catch (e: Exception) {
-            logger.e(TAG, "Failed to collect app exits: ${e.message}")
+            logger.e(TAG, "Failed to collect app exits for user $userId: ${e.message}")
+        }
+    }
+
+    @Suppress("TooGenericExceptionCaught")
+    private fun discoverUserIds(): List<Int> {
+        val um = context.getSystemService(Context.USER_SERVICE) ?: return listOf(0)
+
+        try {
+            val usersMethod = um.javaClass.getMethod("getUsers", Boolean::class.javaPrimitiveType)
+            @Suppress("UNCHECKED_CAST")
+            val userInfoList = usersMethod.invoke(um, true) as? List<*>
+            if (!userInfoList.isNullOrEmpty()) {
+                val ids = userInfoList.mapNotNull { userInfo ->
+                    userInfo?.javaClass?.getField("id")?.getInt(userInfo)
+                }
+                if (ids.isNotEmpty()) return ids
+            }
+        } catch (e: Exception) {
+            logger.d(TAG, "getUsers(boolean) failed: ${e.message}")
+        }
+
+        try {
+            val usersMethod = um.javaClass.getMethod("getUsers")
+            @Suppress("UNCHECKED_CAST")
+            val userInfoList = usersMethod.invoke(um) as? List<*>
+            if (!userInfoList.isNullOrEmpty()) {
+                val ids = userInfoList.mapNotNull { userInfo ->
+                    userInfo?.javaClass?.getField("id")?.getInt(userInfo)
+                }
+                if (ids.isNotEmpty()) return ids
+            }
+        } catch (e: Exception) {
+            logger.d(TAG, "getUsers() failed: ${e.message}")
+        }
+
+        try {
+            val aliveMethod = um.javaClass.getMethod("getAliveUsers")
+            @Suppress("UNCHECKED_CAST")
+            val handles = aliveMethod.invoke(um) as? List<*>
+            if (!handles.isNullOrEmpty()) {
+                val getIdMethod = UserHandle::class.java.getMethod("getIdentifier")
+                val ids = handles.mapNotNull { handle ->
+                    (handle as? UserHandle)?.let { getIdMethod.invoke(it) as? Int }
+                }
+                if (ids.isNotEmpty()) return ids
+            }
+        } catch (e: Exception) {
+            logger.d(TAG, "getAliveUsers() failed: ${e.message}")
+        }
+
+        logger.w(TAG, "All user discovery methods failed, defaulting to user 0")
+        return listOf(0)
+    }
+
+    @Suppress("TooGenericExceptionCaught")
+    private fun activityManagerForUser(userId: Int): ActivityManager {
+        if (userId == 0) {
+            return context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        }
+        return try {
+            val userHandle = UserHandle::class.java
+                .getMethod("of", Int::class.javaPrimitiveType)
+                .invoke(null, userId) as UserHandle
+            val userContext = context.javaClass
+                .getMethod(
+                    "createContextAsUser",
+                    UserHandle::class.java,
+                    Int::class.javaPrimitiveType,
+                )
+                .invoke(context, userHandle, 0) as Context
+            userContext.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        } catch (e: Exception) {
+            logger.w(TAG, "Failed to create AM for user $userId, using default: ${e.message}")
+            context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         }
     }
 

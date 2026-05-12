@@ -25,6 +25,7 @@ import com.porsche.aaos.platform.telemetry.collector.system.SystemMemoryCollecto
 import com.porsche.aaos.platform.telemetry.collector.system.TelephonyCollector
 import com.porsche.aaos.platform.telemetry.collector.system.TimeChangeCollector
 import com.porsche.aaos.platform.telemetry.collector.system.TouchInputCollector
+import com.porsche.aaos.platform.telemetry.collector.system.UserStateCollector
 import com.porsche.aaos.platform.telemetry.collector.vehicle.CarInfoCollector
 import com.porsche.aaos.platform.telemetry.collector.vehicle.DriveStateCollector
 import com.porsche.aaos.platform.telemetry.collector.vehicle.PowerStateCollector
@@ -151,4 +152,8 @@ abstract class CollectorModule {
     @Binds
     @IntoSet
     abstract fun bindDisplayStateCollector(impl: DisplayStateCollector): Collector
+
+    @Binds
+    @IntoSet
+    abstract fun bindUserStateCollector(impl: UserStateCollector): Collector
 }

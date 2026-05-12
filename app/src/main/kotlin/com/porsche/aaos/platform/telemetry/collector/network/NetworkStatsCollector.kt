@@ -54,7 +54,7 @@ class NetworkStatsCollector @Inject constructor(
         logger.i(TAG, "Starting network stats monitoring")
 
         val userIds = discoverUserIds()
-        logger.i(TAG, "Monitoring user IDs: $userIds")
+        logger.i(TAG, "Initial user IDs: $userIds")
 
         // Take initial snapshot so the first delta is meaningful (no cumulative dump)
         previousSnapshot = parseDumpsysNetstats()
@@ -67,7 +67,9 @@ class NetworkStatsCollector @Inject constructor(
         while (running && coroutineContext.isActive) {
             emitTotalStats()
             emitTetheringStats()
-            emitPerUidStats(userIds)
+            // Re-discover users each cycle to catch added/removed users
+            val currentUserIds = discoverUserIds()
+            emitPerUidStats(currentUserIds)
             delay(POLL_INTERVAL_MS)
         }
     }

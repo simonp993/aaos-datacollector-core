@@ -42,7 +42,8 @@ class LocationCollector @Inject constructor(
         logger.i(TAG, "Starting location monitoring (${SAMPLE_INTERVAL_MS / 1000}s sample, ${FLUSH_INTERVAL_MS / 1000}s flush)")
 
         withContext(Dispatchers.Main) {
-            val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            val systemContext = ensureSystemUserContext()
+            val lm = systemContext.getSystemService(Context.LOCATION_SERVICE) as LocationManager
             locationManager = lm
 
             val listener = object : LocationListener {
@@ -114,6 +115,24 @@ class LocationCollector @Inject constructor(
         activeProvider = null
         latestLocation = null
         logger.i(TAG, "Stopped")
+    }
+
+    @Suppress("TooGenericExceptionCaught")
+    private fun ensureSystemUserContext(): Context {
+        return try {
+            val userHandleClass = Class.forName("android.os.UserHandle")
+            val userHandle = userHandleClass
+                .getMethod("of", Int::class.javaPrimitiveType)
+                .invoke(null, 0)
+            val systemContext = context.javaClass
+                .getMethod("createContextAsUser", userHandleClass, Int::class.javaPrimitiveType)
+                .invoke(context, userHandle, 0) as Context
+            logger.i(TAG, "Using explicit user-0 context for location requests")
+            systemContext
+        } catch (e: Exception) {
+            logger.w(TAG, "Cannot create user-0 context, using app context: ${e.message}")
+            context
+        }
     }
 
     private fun samplePoint() {

@@ -68,133 +68,6 @@ class DataCollectorService : Service() {
      *   adb logcat | grep "DataCollector:LogTelemetry.*NavigationCollector"
      *   adb logcat | grep "DataCollector:LogTelemetry.*PowerStateCollector"
     *   adb logcat | grep "DataCollector:LogTelemetry.*AssistantCollector"
-     *
-     * Multiple collectors:
-     *   adb logcat | grep -E "DataCollector:LogTelemetry.*(AppLifecycle|MediaPlayback)"
-     *
-     * Add -s emulator-5554 or -s 172.16.250.248:5555 to target a specific device.
-     *
-     * ── General TODOs (ordered by dependency — do top-first) ───────────────────
-     *
-     * DONE G1: Homogeneous payload structure — see docs/guides/signal-structure-guidelines.md
-     * DONE G2: Consistent timestamps — all use epochMillis (Long). Removed epochSec, iso8601.
-     * DONE G5: Stagger cyclic collectors — deterministic offsets (2–9s) added to all batched
-     *          collectors. Reduces burst load on telemetry sink.
-     * 
-     * TODO G3: make sure, display turn on and of works
-     * 
-     * TODO G3: Make sure that all events that might not be changed often (e.g. CarInfo) are 
-     *          emitted at least once at startup, so we have that data point even if it doesn't change.
-     *          Change signals like audio_snapshot, to only send once, because one snapshot is enough 
-     *          because if nothing else is send after, we know that there was no change.
-     *          This requires a cnetralized approach since multiple signals will be like that, but they need to listen to the same startup event. And also a logic to not send too much events at startup
-     *
-     * TODO G3: Event correlation — add a shared session/correlation ID so events from the
-     *          same drive session or time window can be linked across collectors.
-     *
-     * TODO G4: Multi-user coverage — ensure all collectors query data for user 0 AND user 10.
-     *          PackageCollector and NetworkStatsCollector done; apply pattern to others.
-     *
-     * TODO G6: Power impact analysis — profile CPU/battery impact of DataCollector on the
-     *          system. Identify hot collectors and tune intervals.
-     *
-     * TODO G7: Make events smaller — once structure is stable, minimize payload size while
-     *          keeping the same information (shorter keys, omit null fields, etc.).
-     *
-     * TODO G8: Dev vs prod flavour — some verbose signals (e.g. per-frame, per-touch) should
-     *          only emit in dev builds or at reduced frequency in prod.
-     *
-     * TODO G9: Add payload documentation comments to every collector class explaining what
-     *          each field means, units, and when the event fires.
-     *
-     * TODO G10: Auto-document action names — generate a registry/table of all action name
-     *           strings emitted by collectors (annotation processor or build-time script).
-     *
-     * TODO G11: Combine HeartbeatCollector + SystemCollector? Evaluate if they can merge.
-     *
-     * TODO G12: Display on/off state — detect and emit when displays are turned on/off.
-     *
-     * TODO G13: App startup times — capture time-to-first-frame per app.
-     *           (Blocked — discuss with Mathieu, not possible currently.)
-     *
-     * TODO G14: FrameRate schema — use an efficient schema (deltas/run-length) if frame rate
-     *           data volume becomes a concern.
-     *
-     * TODO G15: Add unit and system and maybe e2etests
-     *
-     * ── Per-Collector TODOs (ordered: broken > wrong data > needs tuning > verify only) ──
-     *
-     * --- BROKEN (emitting nothing) ---
-     *
-     * DONE C1: ConnectivityCollector — fixed event emission, renamed bandwidth fields to
-     *          maxDownloadBandwidthKbps / maxUploadBandwidthKbps.
-     *          adb logcat | grep "DataCollector:LogTelemetry.*ConnectivityCollector"
-     * DONE C3: PackageCollector — rewritten: multi-user (user 0+10), chunked (30 per chunk,
-     *          <4KB), change events include versionName/versionCode for installs/updates.
-     *          adb logcat | grep "DataCollector:LogTelemetry.*PackageCollector"
-     * DONE C4: ProcessCollector — rewritten (dumpsys, 83 processes, cross-user) but DISABLED.
-     *          Process churn is too noisy for fleet telemetry. Re-enable for debugging only.
-     * TODO C2: DriveStateCollector — emits nothing. Fix event emission logic.
-     * TODO C5: CarInfoCollector — empty metadata, no trigger. Fix.
-     *
-     * --- WRONG DATA ---
-     *
-     * TODO C7: MediaPlaybackCollector — weird/malformed payloads. Investigate and fix.
-     *
-     * TODO C8: TimeChangeCollector — manual user time change shows trigger="system" (wrong).
-     *          Also missing `previous` value.
-     *
-     * TODO C9: TelephonyCollector — seems incorrect, no trigger field. Fix trigger logic.
-     *
-     * --- NEEDS TUNING ---
-     *
-     * TODO C10: SensorBatteryCollector — data looks correct but polling too fast. Reduce
-     *           interval or switch to on-change.
-     *
-     * TODO C11: FrameRateCollector — verify display state changes are logged. Check payload
-     *           structure matches expected schema.
-     *
-     * --- WORKING (verified on emulator) ---
-     *
-     * DONE C6: VehiclePropertyCollector — rewritten to batched 60s flush. Schema format:
-     *          sampleSchema: ["timestampMillis","property","previous","current"],
-     *          changes: [[ts, "PROP_NAME", prev, curr], ...]. Skips empty intervals.
-     *          Includes Porsche vendor props (PORSCHE_AP_OPERATING_MODE, PORSCHE_CLAMPS_STATE,
-     *          PORSCHE_SHUTDOWN_FLAG) — graceful no-op on emulator, works on real hardware.
-     *          adb logcat | grep "DataCollector:LogTelemetry.*VehiclePropertyCollector"
-     *
-     * DONE C17: StorageCollector — usagePercent trimmed to 2 decimal places.
-     *           adb logcat | grep "DataCollector:LogTelemetry.*StorageCollector"
-     *
-     * DONE C18: PowerStateCollector (NEW) — emits Power_Boot at startup (bootupReason,
-     *           ignitionState, uptimeMs, powerPolicy) + Power_StateChanged on CarPowerManager
-     *           state transitions. Requires android.car.permission.CAR_POWER.
-     *           adb logcat | grep "DataCollector:LogTelemetry.*PowerStateCollector"
-     *
-     * DONE C19: NavigationCollector (NEW) — emits Navigation_FocusChanged whenever app-focus
-     *           ownership changes (reason: gained/lost/changed), includes previous/current owner,
-     *           source type (carplay/android_auto/native/projection/none), and cluster navigation
-     *           state as context. Requires CAR_NAVIGATION_MANAGER, CAR_PROJECTION_STATUS.
-     *           adb logcat | grep "DataCollector:LogTelemetry.*NavigationCollector"
-     *
-     * --- VERIFY ON REAL DEVICE ---
-     *
-     * TODO C12: AudioCollector — works on emulator (mute button not functional on emu).
-     *           Needs real device testing.
-     *
-     * TODO C13: AppLifecycleCollector — works on emulator. Needs real device testing.
-     *           (App startup time: not possible currently, revisit with Mathieu later.)
-     *
-     * TODO C14: NetworkStatsCollector — works on emulator (multi-user verified).
-     *           Needs real device testing.
-     *
-     * TODO C15: TouchInputCollector — works on emulator. Needs real device testing.
-     *
-     * TODO C16: MemoryCollector — needs emulator + real device testing.
-     *           Test cmd: adb shell am send-trim-memory com.porsche.aaos.platform.telemetry
-     *           RUNNING_MODERATE | RUNNING_LOW | RUNNING_CRITICAL
-     *
-     * ──────────────────────────────────────────────────────────────────────────
      */
     private val collectorEnabled = mapOf(
         "Audio" to true,
@@ -221,6 +94,7 @@ class DataCollectorService : Service() {
         "Navigation" to true,
         "PowerState" to true,
         "Assistant" to true,
+        "UserState" to true,
     )
 
     override fun onCreate() {

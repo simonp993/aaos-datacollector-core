@@ -1,7 +1,10 @@
 package com.porsche.aaos.platform.telemetry.collector.media
 
 import android.app.ActivityManager
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
@@ -25,6 +28,7 @@ class MediaPlaybackCollector @Inject constructor(
 
     private var sessionManager: MediaSessionManager? = null
     private val activeCallbacks = mutableMapOf<MediaController, MediaController.Callback>()
+    private var userSwitchReceiver: BroadcastReceiver? = null
 
     // Previous state per controller package for prev/current payloads
     private val previousPlaybackState = mutableMapOf<String, Map<String, Any?>>()
@@ -86,10 +90,13 @@ class MediaPlaybackCollector @Inject constructor(
             val sessions = getActiveSessionsForUser(manager, userId)
             logger.i(TAG, "Found ${sessions.size} active session(s)")
             sessions.forEach { controller -> registerCallback(controller) }
+            registerUserSwitchReceiver()
         }
     }
 
     override fun stop() {
+        userSwitchReceiver?.let { context.unregisterReceiver(it) }
+        userSwitchReceiver = null
         sessionManager?.removeOnActiveSessionsChangedListener(sessionListener)
         
         // Flush any pending metadata changes
@@ -164,6 +171,45 @@ class MediaPlaybackCollector @Inject constructor(
             logger.w(TAG, "Cannot determine current user, defaulting to 0: ${e.message}")
             0
         }
+    }
+
+    private fun registerUserSwitchReceiver() {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context, intent: Intent) {
+                val newUserId = intent.getIntExtra(EXTRA_USER_HANDLE, -1)
+                if (newUserId < 0) return
+                logger.i(TAG, "User switched to $newUserId, re-registering media sessions")
+                onUserSwitched(newUserId)
+            }
+        }
+        userSwitchReceiver = receiver
+        context.registerReceiver(
+            receiver,
+            IntentFilter(ACTION_USER_SWITCHED),
+            Context.RECEIVER_EXPORTED,
+        )
+    }
+
+    private fun onUserSwitched(userId: Int) {
+        val manager = sessionManager ?: return
+        manager.removeOnActiveSessionsChangedListener(sessionListener)
+        unregisterAllCallbacks()
+
+        // Reset per-session state for the new user
+        previousPlaybackState.clear()
+        previousMetadata.clear()
+        currentlyPlayingPackage = null
+        recentSourceChange = null
+        recentStoppedSource = null
+        recentSkipIntentByPackage.clear()
+        recentTrackChangeAtByPackage.clear()
+        pendingMetadataChanges.clear()
+
+        addSessionListenerForUser(manager, userId)
+        @Suppress("UNCHECKED_CAST")
+        val sessions = getActiveSessionsForUser(manager, userId)
+        logger.i(TAG, "Re-registered for user $userId, found ${sessions.size} session(s)")
+        sessions.forEach { controller -> registerCallback(controller) }
     }
 
     private fun registerCallback(controller: MediaController) {
@@ -558,5 +604,7 @@ class MediaPlaybackCollector @Inject constructor(
 
     companion object {
         private const val TAG = "MediaPlaybackCollector"
+        private const val ACTION_USER_SWITCHED = "android.intent.action.USER_SWITCHED"
+        private const val EXTRA_USER_HANDLE = "android.intent.extra.user_handle"
     }
 }
