@@ -23,6 +23,8 @@ Last updated: 2026-05-11
 ## Features
 
 - Update network traffic, to also show wifi, cellular and tethering
+- Add System_ Analytics
+- Add Analytics for if displays are on, off, standby
 - Add bluetooth, wifi, tethering on, off and tx,rx
 - Add connection flows (sankey for devices)
 - [ ] Add GPS analytics view

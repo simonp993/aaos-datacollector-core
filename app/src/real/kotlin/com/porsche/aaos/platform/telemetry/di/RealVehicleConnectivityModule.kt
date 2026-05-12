@@ -2,6 +2,8 @@ package com.porsche.aaos.platform.telemetry.di
 
 import android.content.Context
 import com.porsche.aaos.platform.telemetry.core.logging.Logger
+import com.porsche.aaos.platform.telemetry.vehicleconnectivity.rsi.AidlDisplayStandbySource
+import com.porsche.aaos.platform.telemetry.vehicleconnectivity.rsi.DisplayStandbySource
 import com.porsche.aaos.platform.telemetry.vehicleconnectivity.rsi.DisplayStateSource
 import com.porsche.aaos.platform.telemetry.vehicleconnectivity.rsi.RsiDisplayStateSource
 import dagger.Module
@@ -20,4 +22,11 @@ object RealVehicleConnectivityModule {
         @ApplicationContext context: Context,
         logger: Logger,
     ): DisplayStateSource = RsiDisplayStateSource(context, logger)
+
+    @Provides
+    @Singleton
+    fun provideDisplayStandbySource(
+        @ApplicationContext context: Context,
+        logger: Logger,
+    ): DisplayStandbySource = AidlDisplayStandbySource(context, logger)
 }

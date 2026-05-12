@@ -56,6 +56,9 @@
         android:name="de.esolutions.android.framework.gateway.BIND_SERVICE_ADMIN_SERVICE" />
     <uses-permission android:name="de.esolutions.fw.android.rsi.gateway.BIND_RSI_ADMIN" />
 
+    <!-- ESO framework: standby service binding (display standby state observation) -->
+    <uses-permission android:name="de.eso.car.permission.POWERMANAGEMENT_STANDBY" />
+
     <uses-feature
         android:name="android.hardware.type.automotive"
         android:required="true" />

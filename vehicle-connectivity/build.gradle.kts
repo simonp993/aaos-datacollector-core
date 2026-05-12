@@ -6,6 +6,10 @@ plugins {
 
 android {
     namespace = "com.porsche.aaos.platform.telemetry.vehicleconnectivity"
+
+    buildFeatures {
+        aidl = true
+    }
 }
 
 dependencies {

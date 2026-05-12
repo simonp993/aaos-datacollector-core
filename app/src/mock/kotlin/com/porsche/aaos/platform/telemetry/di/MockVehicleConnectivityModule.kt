@@ -1,6 +1,8 @@
 package com.porsche.aaos.platform.telemetry.di
 
+import com.porsche.aaos.platform.telemetry.vehicleconnectivity.fake.FakeDisplayStandbySource
 import com.porsche.aaos.platform.telemetry.vehicleconnectivity.fake.FakeDisplayStateSource
+import com.porsche.aaos.platform.telemetry.vehicleconnectivity.rsi.DisplayStandbySource
 import com.porsche.aaos.platform.telemetry.vehicleconnectivity.rsi.DisplayStateSource
 import dagger.Module
 import dagger.Provides
@@ -14,4 +16,8 @@ object MockVehicleConnectivityModule {
     @Provides
     @Singleton
     fun provideDisplayStateSource(): DisplayStateSource = FakeDisplayStateSource()
+
+    @Provides
+    @Singleton
+    fun provideDisplayStandbySource(): DisplayStandbySource = FakeDisplayStandbySource()
 }

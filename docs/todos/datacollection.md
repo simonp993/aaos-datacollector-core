@@ -16,15 +16,12 @@ Users:
         UserInfo{11:#defaultUser:412}
         UserInfo{13:G3_V_ECE:412} running
 When analyzing all collectors, do you see a possible issue in that regard with any of them? 
-- standby mode not detected on passenger display (only on/off)
 - delete the app and logs
 
-- VHAL Changes, specifically speed
+- Change the frequency of Display_StateSnapshot and Display_BrightnessSnapshot, they both are send every minute it seems and not only at startup
+- How is the VHAL collection currently implemented? On change, frequency, batched? The goal is to have some onchange and some with frequency. E.g. fanspeed is onchange, but speed is frequency every 5s. 
 - See if App_ExitDetected works
-- standby mode not detected on passenger display (only on/off)
 - Audio muting does not work.
-- save the package list and only send differences at startup (including a message no differences or empty list if nothing changed)
-- File savings toggle — ability to turn JSONL file writing on/off at runtime (e.g. via adb system property). -> ADB
 - File size limiter — verify the log rotation / size cap works on emulator so storage doesn't fill up. Or implement a delete mechanism, that deletes files that are older than 7 days for example. What would you sugges.t
 
 MITTWOCH
@@ -46,6 +43,7 @@ During weekend drive
 
 
 After weekend drive
+- save the package list and only send differences at startup (including a message no differences or empty list if nothing changed)
 -  Is the bluetooth connection also collecting for other users but 14? so would 10, 11, 12, or so work out of the box 
 - [ ] CarUserManager collector — emit events on user profile lifecycle: driver switch, guest session start/stop, user creation/removal. Guaranteed API on all AAOS builds.
 - [ ] C9: TelephonyCollector — seems incorrect, no trigger field. Fix trigger logic.I have my phone connected and am starting a call when you say it.- [ ] LocationCollector - Test if working (e.g. sometimes display on off, other weird stuff)
@@ -57,6 +55,8 @@ After weekend drive
 - When switching from carplay to bluetooth I get no new Bluetooth device list, even though my phone was connected = false in the lsat payload and that must have changed when switching from carplay to bluetooth. 
 - HUD turn on off and brightness not working
 - Integrate the storage usage shown in settings: Music and audio, Other apps, Files, System
+- Create a list of all actions and what it sends that stays automatically up to date
+- File savings toggle — ability to turn JSONL file writing on/off at runtime (e.g. via adb system property). -> ADB
 
 
 

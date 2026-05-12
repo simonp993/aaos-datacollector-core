@@ -5,6 +5,8 @@ import com.porsche.aaos.platform.telemetry.core.logging.Logger
 import com.porsche.aaos.platform.telemetry.telemetry.Telemetry
 import com.porsche.aaos.platform.telemetry.telemetry.TelemetryEvent
 import com.porsche.aaos.platform.telemetry.vehicleconnectivity.rsi.DisplayBrightnessEvent
+import com.porsche.aaos.platform.telemetry.vehicleconnectivity.rsi.DisplayStandbyEvent
+import com.porsche.aaos.platform.telemetry.vehicleconnectivity.rsi.DisplayStandbySource
 import com.porsche.aaos.platform.telemetry.vehicleconnectivity.rsi.DisplayStateEvent
 import com.porsche.aaos.platform.telemetry.vehicleconnectivity.rsi.DisplayStateSource
 import kotlinx.coroutines.CoroutineScope
@@ -17,7 +19,7 @@ import javax.inject.Inject
 import kotlin.coroutines.coroutineContext
 
 /**
- * Collects display state (on/off) and brightness changes following the Audio_StateChanged pattern.
+ * Collects display state (on/off/standby) and brightness changes.
  *
  * Event types:
  * - **Display_StateChanged**: all display on/off/standby states + which changed
@@ -28,14 +30,13 @@ import kotlin.coroutines.coroutineContext
  * Each "changed" event includes full current state of ALL displays and the
  * previous state of the changed display(s). Periodic snapshots emit full state.
  *
- * On MIB4, display power and brightness are managed via RSI:
- * - MCP_Popups DISPLAY_OFF_POPUP (center, passenger, rear)
- * - HeadUpDisplay switchControls (HUD on/off)
- * - HIDService valueControls (center/passenger/console brightness, -5..5)
- * - InstrumentClusterConfiguration valueControls (IC brightness, -5..5)
+ * Standby detection uses the EsoCarStandbyService AIDL interface.
+ * When standby is active, the display state is "standby" regardless of popup state.
+ * When standby is inactive, the display state falls back to popup-based on/off.
  */
 class DisplayStateCollector @Inject constructor(
     private val displayStateSource: DisplayStateSource,
+    private val displayStandbySource: DisplayStandbySource,
     private val telemetry: Telemetry,
     private val logger: Logger,
 ) : Collector {
@@ -47,10 +48,18 @@ class DisplayStateCollector @Inject constructor(
     private var running = false
     private var stateJob: Job? = null
     private var brightnessJob: Job? = null
+    private var standbyJob: Job? = null
 
     // Full state maps — always contain ALL known displays
     private var displayStates: MutableMap<String, String> = mutableMapOf()
     private var displayBrightness: MutableMap<String, Int> = mutableMapOf()
+
+    // Track standby per display
+    private val standbyActive: MutableMap<String, Boolean> = mutableMapOf()
+    // Track current standby mode per display
+    private val standbyModes: MutableMap<String, String> = mutableMapOf()
+    // Track underlying popup state (on/off) — display off always wins over standby
+    private val popupStates: MutableMap<String, String> = mutableMapOf()
 
     // Previous state snapshots for diff detection
     private var lastEmittedStates: Map<String, String>? = null
@@ -78,6 +87,14 @@ class DisplayStateCollector @Inject constructor(
             }
         }
 
+        // Start standby observation
+        displayStandbySource.start()
+        standbyJob = CoroutineScope(Dispatchers.IO).launch {
+            displayStandbySource.observeStandbyState().collect { event ->
+                handleStandbyChange(event)
+            }
+        }
+
         // Emit initial snapshot
         emitStateSnapshot()
         emitBrightnessSnapshot()
@@ -96,21 +113,27 @@ class DisplayStateCollector @Inject constructor(
         stateJob = null
         brightnessJob?.cancel()
         brightnessJob = null
+        standbyJob?.cancel()
+        standbyJob = null
         displayStateSource.stop()
+        displayStandbySource.stop()
         logger.i(TAG, "DisplayStateCollector stopped")
     }
 
     private fun initializeStates() {
         STATE_DISPLAYS.forEach { display ->
             displayStates[display] = STATE_ON
+            popupStates[display] = STATE_ON
         }
     }
 
-    // --- Display State (on/off) ---
+    // --- Display State (on/off from popup) ---
 
     private fun handleDisplayStateChange(event: DisplayStateEvent) {
+        popupStates[event.display] = event.state
+
         val previous = displayStates.toMap()
-        displayStates[event.display] = event.state
+        displayStates[event.display] = computeEffectiveState(event.display)
 
         if (displayStates == lastEmittedStates) return
 
@@ -130,6 +153,66 @@ class DisplayStateCollector @Inject constructor(
                 timestamp = event.timestamp,
             ),
         )
+    }
+
+    // --- Display Standby (from AIDL service) ---
+
+    private fun handleStandbyChange(event: DisplayStandbyEvent) {
+        // Update mode tracking
+        val mode = event.mode
+        if (mode != null) {
+            standbyModes[event.display] = mode
+        }
+
+        // If this is only a mode change, update active state only if standby was already active
+        if (event.modeChangeOnly) {
+            if (standbyActive[event.display] != true) return
+        } else {
+            standbyActive[event.display] = event.active
+        }
+
+        val previous = displayStates.toMap()
+        displayStates[event.display] = computeEffectiveState(event.display)
+
+        if (displayStates == lastEmittedStates) return
+
+        lastEmittedStates = displayStates.toMap()
+        val trigger = when {
+            event.modeChangeOnly -> "standby_mode_change"
+            event.active -> "standby_on"
+            else -> "standby_off"
+        }
+        telemetry.send(
+            TelemetryEvent(
+                signalId = signalId,
+                payload = mapOf(
+                    "actionName" to ACTION_STATE_CHANGED,
+                    "trigger" to trigger,
+                    "metadata" to mapOf(
+                        "previous" to previous,
+                        "current" to displayStates.toMap(),
+                        "changed" to event.display,
+                    ),
+                ),
+                timestamp = event.timestamp,
+            ),
+        )
+    }
+
+    /**
+     * Computes the effective display state based on priority:
+     * 1. Display off (from popup) always wins → "off"
+     * 2. Standby active (from AIDL) → "standby_<mode>"
+     * 3. Otherwise → "on"
+     */
+    private fun computeEffectiveState(display: String): String {
+        val popupState = popupStates[display] ?: STATE_ON
+        if (popupState == STATE_OFF) return STATE_OFF
+        if (standbyActive[display] == true) {
+            val mode = standbyModes[display] ?: "unknown"
+            return "${STATE_STANDBY}_$mode"
+        }
+        return popupState
     }
 
     private fun emitStateSnapshot() {
@@ -197,6 +280,8 @@ class DisplayStateCollector @Inject constructor(
         private const val ACTION_BRIGHTNESS_SNAPSHOT = "Display_BrightnessSnapshot"
 
         private const val STATE_ON = "on"
+        private const val STATE_OFF = "off"
+        private const val STATE_STANDBY = "standby"
 
         // Displays that have on/off state (not all have brightness)
         private val STATE_DISPLAYS = listOf("center", "passenger", "hud")
