@@ -23,6 +23,23 @@ import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
+/**
+ * Collects connectivity state, transport changes, and signal-strength samples.
+ *
+ * ## MIB4 Platform Limitation — Signal Strength Unavailable
+ * On MIB4, the cellular modem sits on the TCU (Telematics Control Unit), a separate ECU.
+ * The head unit connects to the internet via internal ethernet tunnels (tun0/tun1) to the
+ * TCU. Because Android has no cellular radio:
+ * - `TelephonyManager.networkOperatorName` is empty.
+ * - `NetworkCapabilities.signalStrength` returns Integer.MIN_VALUE (-2147483648 = unknown).
+ * - `linkDownstreamBandwidthKbps` / `linkUpstreamBandwidthKbps` are 0.
+ * - Transport is always reported as "ethernet".
+ *
+ * The actual cellular signal data (4G/5G type, signal quality 0-5) is exposed via Porsche
+ * vendor VHAL properties (PORSCHE_NETWORK_TYPE, PORSCHE_NETWORK_SIGNAL_QUALITY,
+ * PORSCHE_NETWORK_PROVIDER) and collected by VehiclePropertyCollector as VHAL_ValueChanged
+ * events.
+ */
 class ConnectivityCollector @Inject constructor(
     @ApplicationContext private val context: Context,
     private val telemetry: Telemetry,

@@ -28,6 +28,18 @@ import kotlinx.coroutines.isActive
  * `dumpsys netstats --uid` which returns cumulative byte counters for every UID on the
  * system. We store a snapshot each poll and emit the delta (current - previous), giving
  * exact "bytes in the last 60 seconds" semantics for all users without overlap.
+ *
+ * ## MIB4 Network Architecture — Ethernet via TCU
+ * On MIB4, the cellular modem lives in the TCU (Telematics Control Unit), a separate ECU.
+ * Internet traffic is routed from the head unit to the TCU over an internal ethernet bridge
+ * through VPN tunnels (tun0/tun1). Android sees this as ETHERNET transport (type=9), not
+ * MOBILE. Consequences:
+ * - `querySummaryForDevice(TYPE_ETHERNET)` returns null — Android's NetworkStatsService
+ *   does not maintain cumulative bucket stats for ethernet. Network_EthernetTotal is
+ *   therefore computed by summing per-UID ethernet deltas from `dumpsys netstats --uid`.
+ * - `querySummaryForDevice(TYPE_MOBILE)` returns 0 — no modem is visible to Android.
+ * - Per-app traffic is tagged `networkType=ethernet` (netstats ident type=9).
+ * - The `networkstack` UID (1073) shows as `networkType=other` — it handles the tunnel.
  */
 class NetworkStatsCollector @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -205,6 +217,8 @@ class NetworkStatsCollector @Inject constructor(
                 ),
             )
 
+            // Ethernet total via NetworkStatsManager (returns null on MIB4 — see class KDoc).
+            // Fallback: Network_EthernetTotal is also emitted from per-UID deltas in emitPerUidStats().
             val ethernetBucket = networkStatsManager.querySummaryForDevice(
                 ConnectivityManager.TYPE_ETHERNET, null, start, now,
             )
