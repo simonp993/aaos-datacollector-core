@@ -204,6 +204,25 @@ class NetworkStatsCollector @Inject constructor(
                     ),
                 ),
             )
+
+            val ethernetBucket = networkStatsManager.querySummaryForDevice(
+                ConnectivityManager.TYPE_ETHERNET, null, start, now,
+            )
+            if (ethernetBucket != null) {
+                telemetry.send(
+                    TelemetryEvent(
+                        signalId = signalId,
+                        payload = mapOf(
+                            "actionName" to "Network_EthernetTotal",
+                            "trigger" to "heartbeat",
+                            "metadata" to mapOf(
+                                "rxBytes" to ethernetBucket.rxBytes,
+                                "txBytes" to ethernetBucket.txBytes,
+                            ),
+                        ),
+                    ),
+                )
+            }
         } catch (e: Exception) {
             logger.w(TAG, "Failed to collect total network stats", e)
         }
@@ -416,6 +435,26 @@ class NetworkStatsCollector @Inject constructor(
                     ),
                 ),
             )
+
+            // Emit ethernet total from per-UID deltas (fallback for devices where
+            // querySummaryForDevice(TYPE_ETHERNET) returns null)
+            val ethernetRx = deltas.filter { it.key.second == "ethernet" }.values.sumOf { it.first }
+            val ethernetTx = deltas.filter { it.key.second == "ethernet" }.values.sumOf { it.second }
+            if (ethernetRx > 0 || ethernetTx > 0) {
+                telemetry.send(
+                    TelemetryEvent(
+                        signalId = signalId,
+                        payload = mapOf(
+                            "actionName" to "Network_EthernetTotal",
+                            "trigger" to "heartbeat",
+                            "metadata" to mapOf(
+                                "rxBytes" to ethernetRx,
+                                "txBytes" to ethernetTx,
+                            ),
+                        ),
+                    ),
+                )
+            }
         } catch (e: Exception) {
             logger.w(TAG, "Failed to collect per-app network stats", e)
         }
@@ -507,6 +546,7 @@ class NetworkStatsCollector @Inject constructor(
         return when (typeMatch?.groupValues?.get(1)?.toIntOrNull()) {
             TYPE_WIFI -> "wifi"
             TYPE_MOBILE -> "mobile"
+            TYPE_ETHERNET -> "ethernet"
             TYPE_VPN -> "vpn"
             else -> "other"
         }
@@ -527,7 +567,8 @@ class NetworkStatsCollector @Inject constructor(
         // ConnectivityManager network type constants
         private const val TYPE_MOBILE = 0
         private const val TYPE_WIFI = 1
-        private const val TYPE_VPN = 9
+        private const val TYPE_ETHERNET = 9
+        private const val TYPE_VPN = 17
 
         private val UID_PATTERN = Regex("""\buid=(\d+)\b""")
         private val STATS_PATTERN = Regex("""rb=(\d+).*tb=(\d+)""")
