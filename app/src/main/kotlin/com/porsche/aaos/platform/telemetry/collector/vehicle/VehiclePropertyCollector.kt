@@ -186,8 +186,10 @@ class VehiclePropertyCollector @Inject constructor(
     private val previousValues = ConcurrentHashMap<Int, Any>()
 
     // For SAMPLED properties: stores the latest value received from VHAL.
-    // A periodic job reads and emits these at the configured interval.
+    // A periodic job reads these at the configured interval and accumulates
+    // them into a shared sample buffer. The buffer is flushed every BATCH_FLUSH_MS.
     private val sampledLatest = ConcurrentHashMap<Int, Any>()
+    private val sampledBuffer = mutableListOf<List<Any>>()
     private val sampledJobs = mutableListOf<Job>()
 
     @Volatile
@@ -197,12 +199,14 @@ class VehiclePropertyCollector @Inject constructor(
         running = true
         logger.i(TAG, "Starting VHAL observation (immediate per-property emission)")
 
-        // Start sampling jobs for each unique interval
+        // Start sampling jobs: each reads latest values at its interval into buffers
         val sampledByInterval = OBSERVED_PROPERTIES
             .filter { it.mode is SampleMode.Sampled }
             .groupBy { (it.mode as SampleMode.Sampled).intervalMs }
 
         val propLookup = OBSERVED_PROPERTIES.associateBy { it.propertyId }
+
+        // Initialise property lookup for sampling
 
         for ((intervalMs, props) in sampledByInterval) {
             val propIds = props.map { it.propertyId }.toSet()
@@ -210,11 +214,13 @@ class VehiclePropertyCollector @Inject constructor(
                 delay(STAGGER_DELAY_MS)
                 while (isActive) {
                     delay(intervalMs)
+                    val ts = System.currentTimeMillis()
                     for (propertyId in propIds) {
                         val value = sampledLatest[propertyId] ?: continue
-                        val previous = previousValues.put(propertyId, value)
-                        val propName = propLookup[propertyId]?.name ?: continue
-                        emitChange(propName, previous, value)
+                        val name = propLookup[propertyId]?.name ?: continue
+                        synchronized(sampledBuffer) {
+                            sampledBuffer.add(listOf(ts, name, value))
+                        }
                     }
                 }
             }
@@ -225,6 +231,16 @@ class VehiclePropertyCollector @Inject constructor(
                     props.joinToString { it.name },
             )
         }
+
+        // Flush job: emits single batched event every BATCH_FLUSH_MS
+        val flushJob = CoroutineScope(Dispatchers.Default).launch {
+            delay(STAGGER_DELAY_MS + BATCH_FLUSH_MS)
+            while (isActive) {
+                flushSampledBatch()
+                delay(BATCH_FLUSH_MS)
+            }
+        }
+        sampledJobs.add(flushJob)
 
         coroutineScope {
             OBSERVED_PROPERTIES.forEach { prop ->
@@ -257,8 +273,31 @@ class VehiclePropertyCollector @Inject constructor(
         sampledJobs.forEach { it.cancel() }
         sampledJobs.clear()
         sampledLatest.clear()
+        sampledBuffer.clear()
         previousValues.clear()
         logger.i(TAG, "Stopped")
+    }
+
+    private fun flushSampledBatch() {
+        val samples: List<List<Any>>
+        synchronized(sampledBuffer) {
+            if (sampledBuffer.isEmpty()) return
+            samples = sampledBuffer.toList()
+            sampledBuffer.clear()
+        }
+        telemetry.send(
+            TelemetryEvent(
+                signalId = signalId,
+                payload = mapOf(
+                    "actionName" to "VHAL_SampledBatch",
+                    "trigger" to "vehicle",
+                    "metadata" to mapOf(
+                        "sampleSchema" to listOf("ts", "property", "value"),
+                        "samples" to samples,
+                    ),
+                ),
+            ),
+        )
     }
 
     private fun emitChange(property: String, previous: Any?, current: Any?) {
@@ -281,6 +320,7 @@ class VehiclePropertyCollector @Inject constructor(
     companion object {
         private const val TAG = "VehiclePropertyCollector"
         private const val STAGGER_DELAY_MS = 6_000L
+        private const val BATCH_FLUSH_MS = 60_000L
         private const val SAMPLE_5S = 5_000L
         private const val SAMPLE_10S = 10_000L
         private const val SAMPLE_30S = 30_000L

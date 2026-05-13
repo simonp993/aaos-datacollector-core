@@ -57,7 +57,6 @@ class DataCollectorService : Service() {
      *   adb logcat | grep "DataCollector:LogTelemetry.*TimeChangeCollector"
      *   adb logcat | grep "DataCollector:LogTelemetry.*CarInfoCollector"
      *   adb logcat | grep "DataCollector:LogTelemetry.*ConnectivityCollector"
-     *   adb logcat | grep "DataCollector:LogTelemetry.*DriveStateCollector"
      *   adb logcat | grep "DataCollector:LogTelemetry.*PackageCollector"
      *   adb logcat | grep "DataCollector:LogTelemetry.*ProcessCollector"
      *   adb logcat | grep "DataCollector:LogTelemetry.*SensorBatteryCollector"
@@ -77,7 +76,6 @@ class DataCollectorService : Service() {
         "AppLifecycle" to true,
         "CarInfo" to true,
         "Connectivity" to true,
-        "DriveState" to true,
         "Memory" to true,
         "NetworkStats" to true,
         "Package" to true,
