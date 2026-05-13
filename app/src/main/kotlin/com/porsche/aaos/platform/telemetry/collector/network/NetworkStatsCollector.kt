@@ -61,6 +61,12 @@ class NetworkStatsCollector @Inject constructor(
     private var previousTetheringRx: Long = 0L
     private var previousTetheringTx: Long = 0L
 
+    // Previous APN interface byte counters for delta calculation (tun0=OEM, tun1=customer)
+    private var previousApnOemRx: Long = 0L
+    private var previousApnOemTx: Long = 0L
+    private var previousApnCustomerRx: Long = 0L
+    private var previousApnCustomerTx: Long = 0L
+
     override suspend fun start() {
         running = true
         logger.i(TAG, "Starting network stats monitoring")
@@ -73,12 +79,18 @@ class NetworkStatsCollector @Inject constructor(
         val tetheringInit = readTetheringInterfaceBytes()
         previousTetheringRx = tetheringInit.first
         previousTetheringTx = tetheringInit.second
+        val apnInit = readApnInterfaceBytes()
+        previousApnOemRx = apnInit.oemRx
+        previousApnOemTx = apnInit.oemTx
+        previousApnCustomerRx = apnInit.customerRx
+        previousApnCustomerTx = apnInit.customerTx
         delay(STAGGER_DELAY_MS) // Stagger to spread flush bursts
         delay(POLL_INTERVAL_MS)
 
         while (running && coroutineContext.isActive) {
             emitTotalStats()
             emitTetheringStats()
+            emitApnTraffic()
             // Re-discover users each cycle to catch added/removed users
             val currentUserIds = discoverUserIds()
             emitPerUidStats(currentUserIds)
@@ -290,6 +302,99 @@ class NetworkStatsCollector @Inject constructor(
             )
         } catch (e: Exception) {
             logger.w(TAG, "Failed to collect tethering stats", e)
+        }
+    }
+
+    /**
+     * Emits APN traffic totals: OEM-paid (tun0, OEM_PRIVATE) vs customer-paid (tun1, default).
+     *
+     * On MIB4, the TCU exposes two VPN tunnels:
+     * - tun0 = APN2 (OEM-paid): used by OemNetworkPreferences apps (navigation, telemetry, etc.)
+     * - tun1 = APN1 (customer-paid): default route for all other apps
+     *
+     * We read cumulative byte counters from /proc/net/dev and emit deltas per interval.
+     */
+    @Suppress("TooGenericExceptionCaught")
+    private fun emitApnTraffic() {
+        try {
+            val current = readApnInterfaceBytes()
+            val deltaOemRx = (current.oemRx - previousApnOemRx).coerceAtLeast(0L)
+            val deltaOemTx = (current.oemTx - previousApnOemTx).coerceAtLeast(0L)
+            val deltaCustomerRx = (current.customerRx - previousApnCustomerRx).coerceAtLeast(0L)
+            val deltaCustomerTx = (current.customerTx - previousApnCustomerTx).coerceAtLeast(0L)
+            previousApnOemRx = current.oemRx
+            previousApnOemTx = current.oemTx
+            previousApnCustomerRx = current.customerRx
+            previousApnCustomerTx = current.customerTx
+
+            telemetry.send(
+                TelemetryEvent(
+                    signalId = signalId,
+                    payload = mapOf(
+                        "actionName" to "Network_ApnTraffic",
+                        "trigger" to "heartbeat",
+                        "metadata" to mapOf(
+                            "oem" to mapOf(
+                                "interface" to APN_OEM_INTERFACE,
+                                "rxBytes" to deltaOemRx,
+                                "txBytes" to deltaOemTx,
+                            ),
+                            "customer" to mapOf(
+                                "interface" to APN_CUSTOMER_INTERFACE,
+                                "rxBytes" to deltaCustomerRx,
+                                "txBytes" to deltaCustomerTx,
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        } catch (e: Exception) {
+            logger.w(TAG, "Failed to collect APN traffic stats", e)
+        }
+    }
+
+    private data class ApnBytes(
+        val oemRx: Long,
+        val oemTx: Long,
+        val customerRx: Long,
+        val customerTx: Long,
+    )
+
+    /**
+     * Reads cumulative byte counters from /proc/net/dev for APN interfaces (tun0, tun1).
+     */
+    @Suppress("TooGenericExceptionCaught")
+    private fun readApnInterfaceBytes(): ApnBytes {
+        return try {
+            val process = Runtime.getRuntime().exec(arrayOf("cat", "/proc/net/dev"))
+            val output = process.inputStream.bufferedReader().readText()
+            process.waitFor()
+            var oemRx = 0L
+            var oemTx = 0L
+            var customerRx = 0L
+            var customerTx = 0L
+            for (line in output.lines()) {
+                val trimmed = line.trim()
+                val iface = trimmed.substringBefore(":").trim()
+                if (iface == APN_OEM_INTERFACE || iface == APN_CUSTOMER_INTERFACE) {
+                    val fields = trimmed.substringAfter(":").trim().split("\\s+".toRegex())
+                    if (fields.size >= 9) {
+                        val rx = fields[0].toLongOrNull() ?: 0L
+                        val tx = fields[8].toLongOrNull() ?: 0L
+                        if (iface == APN_OEM_INTERFACE) {
+                            oemRx = rx
+                            oemTx = tx
+                        } else {
+                            customerRx = rx
+                            customerTx = tx
+                        }
+                    }
+                }
+            }
+            ApnBytes(oemRx, oemTx, customerRx, customerTx)
+        } catch (e: Exception) {
+            logger.d(TAG, "Failed to read APN interface bytes: ${e.message}")
+            ApnBytes(0L, 0L, 0L, 0L)
         }
     }
 
@@ -577,6 +682,10 @@ class NetworkStatsCollector @Inject constructor(
         private const val POLL_INTERVAL_MS = 60_000L
         private const val STAGGER_DELAY_MS = 9_000L
         private const val PER_USER_RANGE = 100_000
+
+        // APN tunnel interfaces (MIB4 TCU routing)
+        private const val APN_OEM_INTERFACE = "tun0" // OEM-paid (OEM_PRIVATE)
+        private const val APN_CUSTOMER_INTERFACE = "tun1" // Customer-paid (default)
 
         // ConnectivityManager network type constants
         private const val TYPE_MOBILE = 0

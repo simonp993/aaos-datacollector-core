@@ -4,9 +4,41 @@ Consolidated task list for the DataCollector service.
 
 
 ## Before Weekend Drive
-- check if we get the software version of the android system or other metadata. The settings app for example shows model and hardware, porsche build number, android versionandroidr security patch level, kernel veriosn, build number, bt adress, serial number imei, so it must be somewhere. I think maybe even the vhals contain this information. Like before, I'm still not on the real car. 
+- in this car there is a fond display, however, I'm not receiving a Display state changes, when turning it on or off. But it is a bit special in the sense, that I receive all the touch states and so on, but there is no on/off, or brightness option in the Center display, as there is for all the other displays. Maybe it is controlled differently. "displayId": 4,
+Also, this car has the following screens: hud (just display), ic (just display), center (touch and display), passenger (touch and display), fond (touch and display). What displays do you see? is there a way to reliably say which id is which? 
+especially since, e.g. the hud is not working correectly (it was off), but probably this is just incorrect. 
+Display_StateChanged	displayOff	DisplayStateCollector	▶ expand
+{
+  "signalId": "com.porsche.aaos.datacollector.core.DisplayStateCollector",
+  "payload": {
+    "actionName": "Display_StateChanged",
+    "trigger": "displayOff",
+    "metadata": {
+      "previous": {
+        "center": "off",
+        "passenger": "standby_vehiclemodel",
+        "hud": "on"
+      },
+      "current": {
+        "center": "off",
+        "passenger": "off",
+        "hud": "on"
+      },
+      "changed": "passenger"
+    }
+  },
+  "timestamp": 1778684716560
+}
 
-- check if speed is working, check if if frequency of Display_StateSnapshot and Display_BrightnessSnapshot
+- check files produced, and delete again for fresh start
+
+
+
+
+- File size limiter — verify the log rotation / size cap works on emulator so storage doesn't fill up. Or implement a delete mechanism, that deletes files that are older than 7 days for example. What would you suggest?
+
+
+- check if if frequency of Display_StateSnapshot and Display_BrightnessSnapshot
 
 - Audio muting is not sending a signal, audio volume changes do. 
 
@@ -18,10 +50,8 @@ Button press states (e.g. state=PRESSED)
 What we already capture indirectly: Our AppLifecycleCollector picks up the JokerKeyPopupActivity as a focus change when the popup appears — so we see when the jokerkey was long pressed to change the assignment, but not which key or which function was triggered.
 To get actual jokerkey press events, we'd need to subscribe to the RSI resource /Jokerkey$/actions via the vehicle-connectivity module. That signal is not in our current RSI subscription list. Want me to check what RSI signals we currently subscribe to, and look into adding the jokerkey one?
 
-
 - See if App_ExitDetected works
 
-- File size limiter — verify the log rotation / size cap works on emulator so storage doesn't fill up. Or implement a delete mechanism, that deletes files that are older than 7 days for example. What would you suggest?
 
 
 
@@ -35,9 +65,15 @@ To get actual jokerkey press events, we'd need to subscribe to the RSI resource 
 
 
 ## After Weekend Drive
-- check this: Q1: Your app is headless but it's not a core system service. User 0 on AAOS runs things like system_server, SurfaceFlinger, CarService — services that must exist before any human user logs in. Your telemetry app is a user-installed (or profile-installed) privileged app — it's signed with the platform key for permissions, but it's deployed per-profile.
-The reason it works on user 14 specifically: your app collects data in the context of that driver session. If you ran it as user 0, you'd lose the ability to see user-14-specific things (app lifecycle for that user's apps, media sessions, focus changes, etc.). Running as user 14 and borrowing user 0's context only for hardware access (GPS, VHAL) gives you the best of both worlds.
-It still captures cross-user events because the system APIs you use (Car API, LocationManager via user-0 context, etc.) expose system-wide hardware state regardless of which user queries them.
+- map uid of network to pids? 
+- rewrite the architecture, so that every user can query its content. To avoid dumpsys polling and get real-time callbacks, part of the data collection
+logic should run in the active user context (user-13). This could be achieved by:
+A bound service component running as the current user that queries
+CarAppFocusManager, LocationManager, etc. on behalf of the user-0 host service
+Communication between user-0 host and user-13 satellite via AIDL or ContentProvider
+This would eliminate the need for dumpsys parsing and enable instant event delivery.
+But why is it working for things like media collector or others? 
+- make sure that not all send at the same 60s
 - Now lets reconsider Network again: 
 Is 5G differentiation possible? Key 5G Signal Metrics:
 RSRP (Reference Signal Received Power - dBm): Measures the signal strength from a single cell base station. This is the most crucial metric for gauging coverage.
@@ -78,3 +114,27 @@ clean up documentation
 
 
 
+
+
+
+
+Cross-User Compatibility Summary
+
+- check this: Q1: Your app is headless but it's not a core system service. User 0 on AAOS runs things like system_server, SurfaceFlinger, CarService — services that must exist before any human user logs in. Your telemetry app is a user-installed (or profile-installed) privileged app — it's signed with the platform key for permissions, but it's deployed per-profile.
+The reason it works on user 14 specifically: your app collects data in the context of that driver session. If you ran it as user 0, you'd lose the ability to see user-14-specific things (app lifecycle for that user's apps, media sessions, focus changes, etc.). Running as user 14 and borrowing user 0's context only for hardware access (GPS, VHAL) gives you the best of both worlds.
+It still captures cross-user events because the system APIs you use (Car API, LocationManager via user-0 context, etc.) expose system-wide hardware state regardless of which user queries them.
+
+Risk	Collectors
+None (20)	AppLifecycle, Location, AppExit, Bluetooth, DisplayState, FrameRate, IoCollector, UserState, SelfMonitor, SensorBattery, SystemMemory, SystemCpu, Storage, Package, Process, TouchInput, CarInfo, DriveState, VehicleProperty, PowerState
+Low (7)	Audio, Memory, Connectivity, Telephony, Assistant, Navigation, TimeChange, NetworkStats
+Medium (1)	MediaPlaybackCollector
+The only real concern: MediaPlaybackCollector
+It actively re-registers listeners on ACTION_USER_SWITCHED. During the switch there's a brief gap where media events could be missed, and it clears previousPlaybackState/previousMetadata on switch — so the first post-switch event won't have a previous diff.
+
+Everything else is fine because:
+Vehicle/hardware collectors (VHAL, GPS, sensors, display, power) — system-wide hardware bus, no user dependency
+AppLifecycle, AppExit, Package, Process — already use cross-user APIs (getAllRootTaskInfos, getHistoricalProcessExitReasons per user, getInstalledPackagesAsUser, dumpsys)
+Bluetooth — uses registerReceiverAsUser(ALL) explicitly
+Network/Connectivity — hardware-level, system-wide
+TimeChange — uses plain registerReceiver but time changes are system-wide broadcasts, so it still works
+The codebase is well-architected for multi-user — discoverUserIds(), createContextAsUser(), and registerReceiverForAllUsers patterns are used consistently where needed.
