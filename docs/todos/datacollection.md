@@ -42,6 +42,7 @@ To get actual jokerkey press events, we'd need to subscribe to the RSI resource 
 
 
 ## After Weekend Drive
+- is it possible to get all the rsis and asis dynamically? 
 - map uid of network to pids? 
 - rewrite the architecture, so that every user can query its content. To avoid dumpsys polling and get real-time callbacks, part of the data collection
 logic should run in the active user context (user-13). This could be achieved by:
