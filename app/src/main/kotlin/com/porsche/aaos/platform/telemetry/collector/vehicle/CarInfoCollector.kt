@@ -27,8 +27,8 @@ class CarInfoCollector @Inject constructor(
         readProperty<String>(VhalPropertyIds.INFO_MAKE, "make")?.let { info["make"] = it }
         readProperty<String>(VhalPropertyIds.INFO_MODEL, "model")?.let { info["model"] = it }
         readProperty<Int>(VhalPropertyIds.INFO_MODEL_YEAR, "model_year")?.let { info["model_year"] = it }
-        readIntArrayProperty(VhalPropertyIds.INFO_FUEL_TYPE, "fuel_type")?.let { info["fuel_type"] = it }
-        readIntArrayProperty(VhalPropertyIds.INFO_EV_CONNECTOR_TYPE, "ev_connector")?.let { info["ev_connector"] = it }
+        readIntArrayProperty(VhalPropertyIds.INFO_FUEL_TYPE, "fuel_type")?.let { info["fuel_type"] = it.toList() }
+        readIntArrayProperty(VhalPropertyIds.INFO_EV_CONNECTOR_TYPE, "ev_connector")?.let { info["ev_connector"] = it.toList() }
 
         telemetry.send(
             TelemetryEvent(
