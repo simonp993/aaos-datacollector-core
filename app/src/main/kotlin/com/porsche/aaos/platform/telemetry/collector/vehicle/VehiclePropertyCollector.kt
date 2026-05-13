@@ -206,7 +206,17 @@ class VehiclePropertyCollector @Inject constructor(
 
         val propLookup = OBSERVED_PROPERTIES.associateBy { it.propertyId }
 
-        // Initialise property lookup for sampling
+        // Seed sampledLatest with an initial read so properties that don't change
+        // (e.g., speed=0 while stationary) still appear in sampled batches.
+        for (prop in OBSERVED_PROPERTIES.filter { it.mode is SampleMode.Sampled }) {
+            try {
+                vhalPropertyService.readProperty<Any>(prop.propertyId)?.let {
+                    sampledLatest[prop.propertyId] = it
+                }
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                logger.w(TAG, "Initial read failed for ${prop.name}: ${e.message}")
+            }
+        }
 
         for ((intervalMs, props) in sampledByInterval) {
             val propIds = props.map { it.propertyId }.toSet()
