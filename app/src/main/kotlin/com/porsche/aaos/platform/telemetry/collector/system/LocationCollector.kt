@@ -5,6 +5,7 @@ import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Bundle
+import android.os.SystemClock
 import com.porsche.aaos.platform.telemetry.collector.Collector
 import com.porsche.aaos.platform.telemetry.core.logging.Logger
 import com.porsche.aaos.platform.telemetry.telemetry.Telemetry
@@ -34,7 +35,7 @@ class LocationCollector @Inject constructor(
     @Volatile
     private var latestLocation: Location? = null
 
-    // Batched samples: [timestampMillis, latitude, longitude, provider, providerEnabled, reason]
+    // Batched samples: [gpsTimeMillis, latitude, longitude, provider, providerEnabled, reason]
     private val samples = mutableListOf<List<Any?>>()
 
     override suspend fun start() {
@@ -66,26 +67,7 @@ class LocationCollector @Inject constructor(
             }
             locationListener = listener
 
-            @Suppress("MissingPermission") // System-privileged app with platform key
-            val provider = when {
-                lm.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
-                lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
-                else -> {
-                    logger.w(TAG, "No location provider available")
-                    return@withContext
-                }
-            }
-
-            logger.i(TAG, "Using provider: $provider")
-            activeProvider = provider
-
-            @Suppress("MissingPermission")
-            lm.requestLocationUpdates(
-                provider,
-                SAMPLE_INTERVAL_MS,
-                0f, // No distance filter — time-based only
-                listener,
-            )
+            registerProvider(lm, listener)
         }
 
         // Stagger initial delay to spread flush bursts across collectors
@@ -93,14 +75,22 @@ class LocationCollector @Inject constructor(
 
         // Sample every 5 seconds and flush every 60 seconds (12 samples per window).
         var samplesSinceFlush = 0
+        var samplesSinceProviderRetry = 0
         while (running && coroutineContext.isActive) {
             delay(SAMPLE_INTERVAL_MS)
             samplePoint()
             samplesSinceFlush++
+            samplesSinceProviderRetry++
 
             if (samplesSinceFlush >= (FLUSH_INTERVAL_MS / SAMPLE_INTERVAL_MS).toInt()) {
                 flush()
                 samplesSinceFlush = 0
+            }
+
+            // Periodically retry GPS if we're on a fallback or no provider
+            if (samplesSinceProviderRetry >= PROVIDER_RETRY_SAMPLES) {
+                samplesSinceProviderRetry = 0
+                retryGpsProvider()
             }
         }
     }
@@ -135,24 +125,77 @@ class LocationCollector @Inject constructor(
         }
     }
 
+    @Suppress("MissingPermission")
+    private fun registerProvider(lm: LocationManager, listener: LocationListener) {
+        val provider = when {
+            lm.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
+            lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
+            else -> {
+                logger.w(TAG, "No location provider available")
+                return
+            }
+        }
+
+        logger.i(TAG, "Using provider: $provider")
+        activeProvider = provider
+
+        lm.requestLocationUpdates(
+            provider,
+            SAMPLE_INTERVAL_MS,
+            0f, // No distance filter — time-based only
+            listener,
+        )
+    }
+
+    private fun retryGpsProvider() {
+        val lm = locationManager ?: return
+        val listener = locationListener ?: return
+        // Already on GPS — nothing to do
+        if (activeProvider == LocationManager.GPS_PROVIDER) return
+        // Check if GPS became available
+        if (!lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) return
+
+        logger.i(TAG, "GPS provider now available, switching from $activeProvider")
+        @Suppress("MissingPermission")
+        lm.removeUpdates(listener)
+        activeProvider = LocationManager.GPS_PROVIDER
+        latestLocation = null // Clear stale network fix
+        @Suppress("MissingPermission")
+        lm.requestLocationUpdates(
+            LocationManager.GPS_PROVIDER,
+            SAMPLE_INTERVAL_MS,
+            0f,
+            listener,
+        )
+    }
+
     private fun samplePoint() {
-        val now = System.currentTimeMillis()
         val provider = activeProvider
         val providerEnabled = provider?.let { locationManager?.isProviderEnabled(it) } ?: false
         val location = latestLocation
+
+        // Detect stale fix: if location's elapsed realtime age exceeds threshold, treat as lost
+        val ageMs = location?.let {
+            val elapsedNow = SystemClock.elapsedRealtimeNanos()
+            (elapsedNow - it.elapsedRealtimeNanos) / 1_000_000L
+        }
+        val isStale = ageMs != null && ageMs > STALE_THRESHOLD_MS
 
         val reason = when {
             provider == null -> "provider_unavailable"
             !providerEnabled -> "provider_disabled"
             location == null -> "no_fix"
+            isStale -> "stale"
             else -> "ok"
         }
 
-        val latitude: Double? = if (reason == "ok") location?.latitude else null
-        val longitude: Double? = if (reason == "ok") location?.longitude else null
+        val hasValidFix = reason == "ok"
+        val latitude: Double? = if (hasValidFix) location?.latitude else null
+        val longitude: Double? = if (hasValidFix) location?.longitude else null
+        val timestamp: Long = if (hasValidFix) location!!.time else System.currentTimeMillis()
 
         val row: List<Any?> = listOf(
-            now,
+            timestamp,
             latitude,
             longitude,
             provider,
@@ -176,7 +219,7 @@ class LocationCollector @Inject constructor(
                         "trigger" to "heartbeat",
                         "metadata" to mapOf(
                             "sampleSchema" to listOf(
-                                "timestampMillis",
+                                "gpsTimeMillis",
                                 "latitude",
                                 "longitude",
                                 "provider",
@@ -199,5 +242,7 @@ class LocationCollector @Inject constructor(
         private const val SAMPLE_INTERVAL_MS = 5_000L // 5s GPS updates
         private const val FLUSH_INTERVAL_MS = 60_000L // Batch flush every 60s
         private const val STAGGER_DELAY_MS = 4_000L
+        private const val STALE_THRESHOLD_MS = 15_000L // 3x sample interval = stale
+        private const val PROVIDER_RETRY_SAMPLES = 12 // Retry provider every 60s (12 × 5s)
     }
 }

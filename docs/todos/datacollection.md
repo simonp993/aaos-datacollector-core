@@ -4,11 +4,11 @@ Consolidated task list for the DataCollector service.
 
 
 ## Before Weekend Drive
-- Make the sampled vhals send in batches (eg speed)
-- Audio muting is not sending a signal, audio volume changes do. 
-- delete the app and logs from device
+- check if we get the software version of the android system or other metadata. The settings app for example shows model and hardware, porsche build number, android versionandroidr security patch level, kernel veriosn, build number, bt adress, serial number imei, so it must be somewhere. I think maybe even the vhals contain this information. Like before, I'm still not on the real car. 
 
-- check if we get the software version of the android system or other metadata, settings has model and hardware, porsche build number, android versionandroidr security patch level, kernel veriosn, build number, bt adress, serial number imei? 
+- check if speed is working, check if if frequency of Display_StateSnapshot and Display_BrightnessSnapshot
+
+- Audio muting is not sending a signal, audio volume changes do. 
 
 - Get button press jokerkey: 
 RSI Jokerkey — The jokerkey data flows through ESO's RsiJokerKeyConnectorImpl which is part of the CarInterface app (de.eso.porsche.carinterface). It uses the RSI path /Jokerkey$/actions and logs:
@@ -19,17 +19,25 @@ What we already capture indirectly: Our AppLifecycleCollector picks up the Joker
 To get actual jokerkey press events, we'd need to subscribe to the RSI resource /Jokerkey$/actions via the vehicle-connectivity module. That signal is not in our current RSI subscription list. Want me to check what RSI signals we currently subscribe to, and look into adding the jokerkey one?
 
 
-- Change the frequency of Display_StateSnapshot and Display_BrightnessSnapshot, they both are send every minute it seems and not only at startup
-
 - See if App_ExitDetected works
 
 - File size limiter — verify the log rotation / size cap works on emulator so storage doesn't fill up. Or implement a delete mechanism, that deletes files that are older than 7 days for example. What would you suggest?
 
 
 
-## MITTWOCH
-- [ ] Location provider collector — `adb shell dumpsys location` shows which packages are registered for location updates, provider, interval. Proves causal links (e.g. Mapbox → FLP). Collect periodically or on-demand.
 
+
+## During weekend drive
+- Test Tethering separation in real car: It's NOT definitively impossible on a real car with cellular. The BPF forwarding stats (mBpfStatsMap) in dumpsys tethering are only populated when traffic is actually being forwarded through an upstream. On your WiFi-only car, there's no NAT forwarding to measure (clients on the hotspot are local-only or go through WiFi which merges). On a car with cellular as upstream, the BPF tethering offload should populate those forwarding counters — they'd represent exactly the internet-forwarded portion. I updated the comment to be more nuanced about this. Also, READ_NETWORK_USAGE_HISTORY + platform signature might allow calling the hidden NetworkStatsManager.querySummaryForDevice() with the tethering interface type. This is worth revisiting once you have a cellular-equipped car to test on.
+- Full analysis of logs ai based, how can this be set up? 
+
+
+
+
+## After Weekend Drive
+- check this: Q1: Your app is headless but it's not a core system service. User 0 on AAOS runs things like system_server, SurfaceFlinger, CarService — services that must exist before any human user logs in. Your telemetry app is a user-installed (or profile-installed) privileged app — it's signed with the platform key for permissions, but it's deployed per-profile.
+The reason it works on user 14 specifically: your app collects data in the context of that driver session. If you ran it as user 0, you'd lose the ability to see user-14-specific things (app lifecycle for that user's apps, media sessions, focus changes, etc.). Running as user 14 and borrowing user 0's context only for hardware access (GPS, VHAL) gives you the best of both worlds.
+It still captures cross-user events because the system APIs you use (Car API, LocationManager via user-0 context, etc.) expose system-wide hardware state regardless of which user queries them.
 - Now lets reconsider Network again: 
 Is 5G differentiation possible? Key 5G Signal Metrics:
 RSRP (Reference Signal Received Power - dBm): Measures the signal strength from a single cell base station. This is the most crucial metric for gauging coverage.
@@ -37,21 +45,6 @@ SINR (Signal to Interference plus Noise Ratio - dB): Measures the clarity of the
 RSRQ (Reference Signal Received Quality - dB): Indicates the overall quality of the received signal, heavily influenced by network load and interference.
 RSSI (Received Signal Strength Indicator - dBm): The total received power, including desired signal, interference, and noise
 make sure operatorName in SignalStrenght cellular contains a string an not only "" (I know it is empty when on wifi, but please chck, that it is no bug)
-
-- Full analysis of logs ai based, how can this be set up? 
-
-
-
-
-## During weekend drive
-
-- Test Tethering separation in real car: It's NOT definitively impossible on a real car with cellular. The BPF forwarding stats (mBpfStatsMap) in dumpsys tethering are only populated when traffic is actually being forwarded through an upstream. On your WiFi-only car, there's no NAT forwarding to measure (clients on the hotspot are local-only or go through WiFi which merges). On a car with cellular as upstream, the BPF tethering offload should populate those forwarding counters — they'd represent exactly the internet-forwarded portion. I updated the comment to be more nuanced about this. Also, READ_NETWORK_USAGE_HISTORY + platform signature might allow calling the hidden NetworkStatsManager.querySummaryForDevice() with the tethering interface type. This is worth revisiting once you have a cellular-equipped car to test on.
-
-
-
-
-## After Weekend Drive
-
 - Can I get all the buttons there are? 
 - Add listener for location and voice listener (drop down)
 - save the package list and only send differences at startup (including a message no differences or empty list if nothing changed)

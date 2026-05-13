@@ -12,11 +12,8 @@ import com.porsche.aaos.platform.telemetry.vehicleconnectivity.rsi.DisplayStateS
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import javax.inject.Inject
-import kotlin.coroutines.coroutineContext
 
 /**
  * Collects display state (on/off/standby) and brightness changes.
@@ -24,11 +21,11 @@ import kotlin.coroutines.coroutineContext
  * Event types:
  * - **Display_StateChanged**: all display on/off/standby states + which changed
  * - **Display_BrightnessChanged**: all display brightness levels + which changed
- * - **Display_StateSnapshot**: periodic heartbeat of all display states
- * - **Display_BrightnessSnapshot**: periodic heartbeat of all brightness levels
+ * - **Display_StateSnapshot**: startup snapshot of all display states
+ * - **Display_BrightnessSnapshot**: startup snapshot of all brightness levels
  *
  * Each "changed" event includes full current state of ALL displays and the
- * previous state of the changed display(s). Periodic snapshots emit full state.
+ * previous state of the changed display(s). Startup snapshots emit full state.
  *
  * Standby detection uses the EsoCarStandbyService AIDL interface.
  * When standby is active, the display state is "standby" regardless of popup state.
@@ -95,16 +92,9 @@ class DisplayStateCollector @Inject constructor(
             }
         }
 
-        // Emit initial snapshot
+        // Emit initial snapshot at startup only
         emitStateSnapshot()
         emitBrightnessSnapshot()
-
-        // Periodic heartbeat every 60s
-        while (running && coroutineContext.isActive) {
-            delay(HEARTBEAT_MS)
-            emitStateSnapshot()
-            emitBrightnessSnapshot()
-        }
     }
 
     override fun stop() {
@@ -222,7 +212,7 @@ class DisplayStateCollector @Inject constructor(
                 signalId = signalId,
                 payload = mapOf(
                     "actionName" to ACTION_STATE_SNAPSHOT,
-                    "trigger" to "heartbeat",
+                    "trigger" to "startup",
                     "metadata" to displayStates.toMap(),
                 ),
             ),
@@ -263,7 +253,7 @@ class DisplayStateCollector @Inject constructor(
                 signalId = signalId,
                 payload = mapOf(
                     "actionName" to ACTION_BRIGHTNESS_SNAPSHOT,
-                    "trigger" to "heartbeat",
+                    "trigger" to "startup",
                     "metadata" to displayBrightness.toMap(),
                 ),
             ),
@@ -272,7 +262,6 @@ class DisplayStateCollector @Inject constructor(
 
     companion object {
         private const val TAG = "DisplayStateCollector"
-        private const val HEARTBEAT_MS = 60_000L
 
         private const val ACTION_STATE_CHANGED = "Display_StateChanged"
         private const val ACTION_STATE_SNAPSHOT = "Display_StateSnapshot"
