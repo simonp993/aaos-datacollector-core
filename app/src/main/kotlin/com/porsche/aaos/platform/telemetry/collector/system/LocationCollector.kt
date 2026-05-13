@@ -4,13 +4,15 @@ import android.content.Context
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
+import android.location.LocationRequest
 import android.os.Bundle
-import android.os.SystemClock
 import com.porsche.aaos.platform.telemetry.collector.Collector
 import com.porsche.aaos.platform.telemetry.core.logging.Logger
 import com.porsche.aaos.platform.telemetry.telemetry.Telemetry
 import com.porsche.aaos.platform.telemetry.telemetry.TelemetryEvent
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.BufferedReader
+import java.io.InputStreamReader
 import javax.inject.Inject
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.Dispatchers
@@ -18,6 +20,31 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 
+/**
+ * Collects GPS position samples at [SAMPLE_INTERVAL_MS] intervals, flushed every
+ * [FLUSH_INTERVAL_MS].
+ *
+ * ## MIB4 AAOS Location Architecture
+ *
+ * On MIB4 the service runs as user 0 (`singleUser="true"`) but the active driver profile
+ * is user 13+. LocationManagerService marks user-0 UIDs as "inactive" in the multi-user
+ * model and will NOT deliver location callbacks — regardless of:
+ * - `ACCESS_BACKGROUND_LOCATION` permission
+ * - `FOREGROUND_SERVICE_TYPE_LOCATION` capability (grants `L` cap but still inactive)
+ * - `LOCATION_BYPASS` + `setLocationSettingsIgnored(true)` (bypasses settings, not user check)
+ * - Passive provider registration
+ * - Background throttle whitelist
+ *
+ * The only user-0 app that receives GPS is `com.here.mib4.psd` which is in the
+ * `config_locationEmergencyBypassPackages` system resource overlay (not configurable at
+ * runtime) AND has BTOP adj from a visible-process binding.
+ *
+ * **Solution**: We register a LocationManager listener optimistically (works if platform
+ * restrictions are lifted in future firmware), and fall back to reading the GPS provider's
+ * cached `last location` from `dumpsys location`. Other system apps (HERE, Mapbox,
+ * Porsche Assistant, aptiv) keep GPS active at 100ms-1s intervals, so the cached fix is
+ * always fresh.
+ */
 class LocationCollector @Inject constructor(
     @ApplicationContext private val context: Context,
     private val telemetry: Telemetry,
@@ -31,66 +58,35 @@ class LocationCollector @Inject constructor(
     private var running = false
     private var locationManager: LocationManager? = null
     private var locationListener: LocationListener? = null
-    private var activeProvider: String? = null
     @Volatile
     private var latestLocation: Location? = null
 
-    // Batched samples: [gpsTimeMillis, latitude, longitude, provider, providerEnabled, reason]
+    // Batched samples: [gpsTimeMillis, latitude, longitude, provider, accuracy, reason]
     private val samples = mutableListOf<List<Any?>>()
 
     override suspend fun start() {
         running = true
-        logger.i(TAG, "Starting location monitoring (${SAMPLE_INTERVAL_MS / 1000}s sample, ${FLUSH_INTERVAL_MS / 1000}s flush)")
+        logger.i(
+            TAG,
+            "Starting location monitoring " +
+                "(${SAMPLE_INTERVAL_MS / 1000}s sample, ${FLUSH_INTERVAL_MS / 1000}s flush)",
+        )
 
         withContext(Dispatchers.Main) {
-            val systemContext = ensureSystemUserContext()
-            val lm = systemContext.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-            locationManager = lm
-
-            val listener = object : LocationListener {
-                override fun onLocationChanged(location: Location) {
-                    latestLocation = location
-                }
-
-                override fun onProviderEnabled(provider: String) {
-                    logger.d(TAG, "Provider enabled: $provider")
-                }
-
-                override fun onProviderDisabled(provider: String) {
-                    logger.d(TAG, "Provider disabled: $provider")
-                }
-
-                @Deprecated("Deprecated in API 29")
-                override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {
-                    // Required override for older API levels
-                }
-            }
-            locationListener = listener
-
-            registerProvider(lm, listener)
+            registerLocationListener()
         }
 
-        // Stagger initial delay to spread flush bursts across collectors
         delay(STAGGER_DELAY_MS)
 
-        // Sample every 5 seconds and flush every 60 seconds (12 samples per window).
         var samplesSinceFlush = 0
-        var samplesSinceProviderRetry = 0
         while (running && coroutineContext.isActive) {
             delay(SAMPLE_INTERVAL_MS)
             samplePoint()
             samplesSinceFlush++
-            samplesSinceProviderRetry++
 
-            if (samplesSinceFlush >= (FLUSH_INTERVAL_MS / SAMPLE_INTERVAL_MS).toInt()) {
+            if (samplesSinceFlush >= SAMPLES_PER_FLUSH) {
                 flush()
                 samplesSinceFlush = 0
-            }
-
-            // Periodically retry GPS if we're on a fallback or no provider
-            if (samplesSinceProviderRetry >= PROVIDER_RETRY_SAMPLES) {
-                samplesSinceProviderRetry = 0
-                retryGpsProvider()
             }
         }
     }
@@ -102,110 +98,168 @@ class LocationCollector @Inject constructor(
         }
         locationListener = null
         locationManager = null
-        activeProvider = null
         latestLocation = null
         logger.i(TAG, "Stopped")
     }
 
+    /**
+     * Registers a GPS listener optimistically. On MIB4 this listener will be marked
+     * "inactive" and receive 0 callbacks, but we keep it registered so that if the
+     * platform restriction is lifted (firmware update, profile change) we immediately
+     * start receiving direct callbacks without a restart.
+     */
+    @Suppress("MissingPermission")
+    private fun registerLocationListener() {
+        val userContext = createForegroundUserContext()
+        val lm = userContext.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        locationManager = lm
+
+        if (!lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+            logger.w(TAG, "GPS provider not enabled")
+            return
+        }
+
+        val listener = object : LocationListener {
+            override fun onLocationChanged(location: Location) {
+                latestLocation = location
+            }
+            override fun onProviderEnabled(provider: String) {}
+            override fun onProviderDisabled(provider: String) {}
+            @Deprecated("Deprecated in API 29")
+            override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+        }
+        locationListener = listener
+
+        val request = buildLocationRequest()
+        lm.requestLocationUpdates(
+            LocationManager.GPS_PROVIDER,
+            request,
+            context.mainExecutor,
+            listener,
+        )
+        logger.i(TAG, "Registered GPS listener (optimistic, dumpsys fallback active)")
+    }
+
+    private fun buildLocationRequest(): LocationRequest {
+        val builder = LocationRequest.Builder(SAMPLE_INTERVAL_MS)
+            .setQuality(LocationRequest.QUALITY_HIGH_ACCURACY)
+            .setMinUpdateDistanceMeters(0f)
+
+        // Enable bypass via reflection (@SystemApi, requires LOCATION_BYPASS permission)
+        try {
+            val method = LocationRequest.Builder::class.java
+                .getMethod("setLocationSettingsIgnored", Boolean::class.javaPrimitiveType)
+            method.invoke(builder, true)
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            logger.w(TAG, "Cannot set location bypass: ${e.message}")
+        }
+
+        return builder.build()
+    }
+
     @Suppress("TooGenericExceptionCaught")
-    private fun ensureSystemUserContext(): Context {
+    private fun createForegroundUserContext(): Context {
         return try {
-            val userHandleClass = Class.forName("android.os.UserHandle")
-            val userHandle = userHandleClass
+            val am = context.getSystemService(Context.ACTIVITY_SERVICE)
+            val userId = am?.javaClass?.getMethod("getCurrentUser")?.invoke(am) as? Int ?: 0
+            val userHandle = Class.forName("android.os.UserHandle")
                 .getMethod("of", Int::class.javaPrimitiveType)
-                .invoke(null, 0)
-            val systemContext = context.javaClass
-                .getMethod("createContextAsUser", userHandleClass, Int::class.javaPrimitiveType)
+                .invoke(null, userId)
+            val userContext = context.javaClass
+                .getMethod(
+                    "createContextAsUser",
+                    Class.forName("android.os.UserHandle"),
+                    Int::class.javaPrimitiveType,
+                )
                 .invoke(context, userHandle, 0) as Context
-            logger.i(TAG, "Using explicit user-0 context for location requests")
-            systemContext
+            logger.i(TAG, "Using user-$userId context")
+            userContext
         } catch (e: Exception) {
-            logger.w(TAG, "Cannot create user-0 context, using app context: ${e.message}")
+            logger.w(TAG, "Cannot create user context: ${e.message}")
             context
         }
     }
 
-    @Suppress("MissingPermission")
-    private fun registerProvider(lm: LocationManager, listener: LocationListener) {
-        val provider = when {
-            lm.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
-            lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
-            else -> {
-                logger.w(TAG, "No location provider available")
-                return
-            }
-        }
-
-        logger.i(TAG, "Using provider: $provider")
-        activeProvider = provider
-
-        lm.requestLocationUpdates(
-            provider,
-            SAMPLE_INTERVAL_MS,
-            0f, // No distance filter — time-based only
-            listener,
-        )
-    }
-
-    private fun retryGpsProvider() {
-        val lm = locationManager ?: return
-        val listener = locationListener ?: return
-        // Already on GPS — nothing to do
-        if (activeProvider == LocationManager.GPS_PROVIDER) return
-        // Check if GPS became available
-        if (!lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) return
-
-        logger.i(TAG, "GPS provider now available, switching from $activeProvider")
-        @Suppress("MissingPermission")
-        lm.removeUpdates(listener)
-        activeProvider = LocationManager.GPS_PROVIDER
-        latestLocation = null // Clear stale network fix
-        @Suppress("MissingPermission")
-        lm.requestLocationUpdates(
-            LocationManager.GPS_PROVIDER,
-            SAMPLE_INTERVAL_MS,
-            0f,
-            listener,
-        )
-    }
-
     private fun samplePoint() {
-        val provider = activeProvider
-        val providerEnabled = provider?.let { locationManager?.isProviderEnabled(it) } ?: false
+        // Primary: direct listener callback (works when platform doesn't throttle us)
+        // Fallback: parse cached GPS fix from dumpsys location
         val location = latestLocation
+        val dumpsysFix = if (location == null) readGpsFromDumpsys() else null
+        val lat = location?.latitude ?: dumpsysFix?.first
+        val lon = location?.longitude ?: dumpsysFix?.second
+        val accuracy = location?.accuracy ?: dumpsysFix?.third
 
-        // Detect stale fix: if location's elapsed realtime age exceeds threshold, treat as lost
-        val ageMs = location?.let {
-            val elapsedNow = SystemClock.elapsedRealtimeNanos()
-            (elapsedNow - it.elapsedRealtimeNanos) / 1_000_000L
+        val source = when {
+            location != null -> "listener"
+            dumpsysFix != null -> "dumpsys"
+            else -> null
         }
-        val isStale = ageMs != null && ageMs > STALE_THRESHOLD_MS
 
         val reason = when {
-            provider == null -> "provider_unavailable"
-            !providerEnabled -> "provider_disabled"
-            location == null -> "no_fix"
-            isStale -> "stale"
-            else -> "ok"
+            lat != null && lon != null -> "ok"
+            source == null -> "no_fix"
+            else -> "no_fix"
         }
 
-        val hasValidFix = reason == "ok"
-        val latitude: Double? = if (hasValidFix) location?.latitude else null
-        val longitude: Double? = if (hasValidFix) location?.longitude else null
-        val timestamp: Long = if (hasValidFix) location!!.time else System.currentTimeMillis()
-
         val row: List<Any?> = listOf(
-            timestamp,
-            latitude,
-            longitude,
-            provider,
-            providerEnabled,
+            System.currentTimeMillis(),
+            lat,
+            lon,
+            source ?: "gps",
+            accuracy,
             reason,
         )
 
         synchronized(samples) {
             samples.add(row)
         }
+    }
+
+    /**
+     * Parses the GPS provider's last known location from `dumpsys location`.
+     * Format: `last location=Location[gps 48.839365,8.869153 hAcc=3.15 ...]`
+     *
+     * Returns (latitude, longitude, accuracy) or null if unavailable.
+     */
+    @Suppress("TooGenericExceptionCaught")
+    private fun readGpsFromDumpsys(): Triple<Double, Double, Float>? {
+        return try {
+            val process = Runtime.getRuntime().exec(
+                arrayOf("dumpsys", "location"),
+            )
+            val output = BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
+                var inGpsProvider = false
+                for (line in reader.lineSequence()) {
+                    if (line.contains("gps provider:")) {
+                        inGpsProvider = true
+                    }
+                    if (inGpsProvider && line.contains("last location=Location[gps")) {
+                        return@use line
+                    }
+                    // Stop after finding fused/network provider section
+                    if (inGpsProvider && !line.startsWith(" ") && line.contains("provider:")) {
+                        break
+                    }
+                }
+                null
+            }
+            process.waitFor()
+
+            output?.let { parseLocationLine(it) }
+        } catch (e: Exception) {
+            logger.w(TAG, "dumpsys location failed: ${e.message}")
+            null
+        }
+    }
+
+    private fun parseLocationLine(line: String): Triple<Double, Double, Float>? {
+        // Location[gps 48.839365,8.869153 hAcc=3.15 ...]
+        val coordMatch = COORD_PATTERN.find(line) ?: return null
+        val lat = coordMatch.groupValues[1].toDoubleOrNull() ?: return null
+        val lon = coordMatch.groupValues[2].toDoubleOrNull() ?: return null
+        val accMatch = ACCURACY_PATTERN.find(line)
+        val accuracy = accMatch?.groupValues?.get(1)?.toFloatOrNull() ?: 0f
+        return Triple(lat, lon, accuracy)
     }
 
     private fun flush() {
@@ -222,8 +276,8 @@ class LocationCollector @Inject constructor(
                                 "gpsTimeMillis",
                                 "latitude",
                                 "longitude",
-                                "provider",
-                                "providerEnabled",
+                                "source",
+                                "accuracyMeters",
                                 "reason",
                             ),
                             "sampleIntervalMs" to SAMPLE_INTERVAL_MS,
@@ -239,10 +293,14 @@ class LocationCollector @Inject constructor(
 
     companion object {
         private const val TAG = "LocationCollector"
-        private const val SAMPLE_INTERVAL_MS = 5_000L // 5s GPS updates
-        private const val FLUSH_INTERVAL_MS = 60_000L // Batch flush every 60s
+        private const val SAMPLE_INTERVAL_MS = 30_000L
+        private const val FLUSH_INTERVAL_MS = 60_000L
         private const val STAGGER_DELAY_MS = 4_000L
-        private const val STALE_THRESHOLD_MS = 15_000L // 3x sample interval = stale
-        private const val PROVIDER_RETRY_SAMPLES = 12 // Retry provider every 60s (12 × 5s)
+        private val SAMPLES_PER_FLUSH = (FLUSH_INTERVAL_MS / SAMPLE_INTERVAL_MS).toInt()
+
+        // Location[gps 48.839365,8.869153 ...]
+        private val COORD_PATTERN = Regex("""Location\[gps\s+([-\d.]+),([-\d.]+)""")
+        // hAcc=3.15
+        private val ACCURACY_PATTERN = Regex("""hAcc=([-\d.]+)""")
     }
 }
