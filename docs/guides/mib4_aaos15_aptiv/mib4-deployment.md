@@ -329,6 +329,31 @@ adb -s "$SER" shell "am start --user $CURRENT_USER \
   -n $PKG/.DebugStartActivity"
 ```
 
+#### Restart Service Only (No Reinstall)
+
+When you just need to restart the service without rebuilding or reinstalling:
+
+```bash
+PKG="com.porsche.aaos.platform.telemetry"
+SER="172.16.250.248:5555"
+
+adb -s "$SER" shell "am force-stop $PKG"
+adb -s "$SER" shell "am start --user $(adb -s $SER shell am get-current-user | tr -d '\r') \
+  -a com.porsche.aaos.platform.telemetry.action.START_SERVICE_ACTIVITY_DEBUG \
+  -n $PKG/.DebugStartActivity"
+```
+
+Or as a one-liner:
+
+```bash
+adb -s 172.16.250.248:5555 shell am force-stop com.porsche.aaos.platform.telemetry && \
+adb -s 172.16.250.248:5555 shell am start --user 13 \
+  -a com.porsche.aaos.platform.telemetry.action.START_SERVICE_ACTIVITY_DEBUG \
+  -n com.porsche.aaos.platform.telemetry/.DebugStartActivity
+```
+
+> **Note:** Replace `--user 13` with the current active user if it differs. Check with `adb shell am get-current-user`.
+
 > **Note:** A new JSONL file is created on each service restart (timestamped filename). Previous files are retained up to the 1 GB storage cap.
 
 #### Troubleshooting: Service Not Starting
