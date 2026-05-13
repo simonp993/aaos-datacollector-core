@@ -44,6 +44,7 @@ To get actual jokerkey press events, we'd need to subscribe to the RSI resource 
 ## After Weekend Drive
 - is it possible to get all the rsis and asis dynamically? 
 - map uid of network to pids? 
+- 
 - rewrite the architecture, so that every user can query its content. To avoid dumpsys polling and get real-time callbacks, part of the data collection
 logic should run in the active user context (user-13). This could be achieved by:
 A bound service component running as the current user that queries
@@ -53,7 +54,10 @@ This would eliminate the need for dumpsys parsing and enable instant event deliv
 But why is it working for things like media collector or others? 
 - make sure that not all send at the same 60s
 - Now lets reconsider Network again: 
-Is 5G differentiation possible? Key 5G Signal Metrics:
+- make dsiplay usage more dynamic (e.g. console doesnt show up) "Console" does NOT appear in either OccupantZoneService or dumpsys display.
+This means it's not an Android display. The HIDService brightness control for it likely exists because the RSI platform config is shared across the entire E3/MIB4 lineup (Taycan, Cayenne, etc.) — some variants have a lower console touch panel (separate ECU, not Android). The RSI service exposes the control regardless, but on your car either it's not physically present or it's a non-adjustable fixed-brightness panel.
+So yes — CarOccupantZoneManager / OccupantZoneService is the reliable ground truth for which displays actually exist on a given vehicle. You could cross-reference HIDService controls against it to filter phantoms. The "console" brightness UUID is exposed by RSI generically but has no corresponding Android display entry, confirming it's either absent or non-functional on this trim.
+-Is 5G differentiation possible? Key 5G Signal Metrics:
 RSRP (Reference Signal Received Power - dBm): Measures the signal strength from a single cell base station. This is the most crucial metric for gauging coverage.
 SINR (Signal to Interference plus Noise Ratio - dB): Measures the clarity of the signal compared to background noise and interference. A higher SINR determines higher modulation (like 1024-QAM) and faster speeds.
 RSRQ (Reference Signal Received Quality - dB): Indicates the overall quality of the received signal, heavily influenced by network load and interference.
