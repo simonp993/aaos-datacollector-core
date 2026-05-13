@@ -2,27 +2,54 @@ package com.porsche.aaos.platform.telemetry.collector.system
 
 import android.car.Car
 import android.car.CarAppFocusManager
-import android.car.CarProjectionManager
-import android.car.cluster.ClusterHomeManager
-import android.car.projection.ProjectionStatus
 import android.content.Context
 import com.porsche.aaos.platform.telemetry.collector.Collector
 import com.porsche.aaos.platform.telemetry.core.logging.Logger
 import com.porsche.aaos.platform.telemetry.telemetry.Telemetry
 import com.porsche.aaos.platform.telemetry.telemetry.TelemetryEvent
 import dagger.hilt.android.qualifiers.ApplicationContext
-import java.util.concurrent.Executors
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import javax.inject.Inject
 
 /**
- * Collects system-level navigation app-focus ownership changes.
+ * Collects navigation app-focus ownership changes via CarAppFocusManager.
  *
- * Emits single unified event:
- * - Navigation_FocusChanged: whenever navigation app-focus ownership changes
- *   (app gains/loses focus, or different app acquires focus).
+ * ## Multi-user limitation (MIB4)
  *
- * Also captures cluster navigation state presence to provide route guidance context,
- * but the primary signal is app-focus ownership change.
+ * On MIB4 the telemetry service runs as user-0 (system), but the active HU user
+ * is user-13. CarAppFocusManager's OnAppFocusChangedListener and getAppTypeOwner()
+ * are scoped per-user — a user-0 process cannot observe focus changes owned by
+ * user-13 apps. The same limitation affects LocationManager, SensorManager, and
+ * other system managers whose state is user-isolated.
+ *
+ * ## Current workaround
+ *
+ * This collector polls `dumpsys car_service` (which reports cross-user state) and
+ * parses the AppFocusService section to detect who holds navigation focus
+ * (APP_FOCUS_TYPE_NAVIGATION = 1). The owning PID is resolved to a package name
+ * via `dumpsys activity processes`.
+ *
+ * ## Ideal architecture (future)
+ *
+ * To avoid dumpsys polling and get real-time callbacks, part of the data collection
+ * logic should run in the active user context (user-13). This could be achieved by:
+ * - A bound service component running as the current user that queries
+ *   CarAppFocusManager, LocationManager, etc. on behalf of the user-0 host service
+ * - Communication between user-0 host and user-13 satellite via AIDL or ContentProvider
+ * This would eliminate the need for dumpsys parsing and enable instant event delivery.
+ *
+ * ## Emits
+ *
+ * - Navigation_FocusChanged: when the navigation focus owner changes
+ *   (gained, lost, or switched to a different package).
+ *
+ * The owner package name is classified:
+ * - "carplay" if the owner contains "carplay"
+ * - "android_auto" if it contains "androidauto" or "android.auto"
+ * - "native" if it contains known native nav hints (mapbox, here, nav, maps, etc.)
+ * - "none" if no app holds navigation focus
  */
 class NavigationCollector @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -35,32 +62,15 @@ class NavigationCollector @Inject constructor(
 
     private var car: Car? = null
     private var appFocusManager: CarAppFocusManager? = null
-    private var projectionManager: CarProjectionManager? = null
-    private var clusterHomeManager: ClusterHomeManager? = null
-
-    private val callbackExecutor = Executors.newSingleThreadExecutor()
-
-    private var appFocusListener: CarAppFocusManager.OnAppFocusChangedListener? = null
-    private var projectionStatusListener: CarProjectionManager.ProjectionStatusListener? = null
-    private var clusterNavigationListener: ClusterHomeManager.ClusterNavigationStateListener? = null
 
     @Volatile
     private var previousOwner: String? = null
 
     @Volatile
-    private var previousSourceType: String? = null
-
-    @Volatile
-    private var projectionPackage: String? = null
-
-    @Volatile
-    private var hasClusterNavState: Boolean = false
-
-    @Volatile
-    private var lastClusterPayloadSize: Int = 0
+    private var previousSourceType: String = "none"
 
     override suspend fun start() {
-        logger.i(TAG, "Starting navigation monitoring")
+        logger.i(TAG, "Starting navigation monitoring (poll-based via dumpsys)")
 
         val carInstance = try {
             Car.createCar(context)
@@ -75,172 +85,140 @@ class NavigationCollector @Inject constructor(
         }
         car = carInstance
 
-        connectAppFocus(carInstance)
-        connectProjection(carInstance)
-        connectClusterNavigation(carInstance)
+        val manager = try {
+            carInstance.getCarManager(Car.APP_FOCUS_SERVICE) as? CarAppFocusManager
+        } catch (e: Exception) {
+            logger.e(TAG, "Failed to get CarAppFocusManager: ${e.message}")
+            null
+        }
+
+        if (manager == null) {
+            logger.w(TAG, "CarAppFocusManager unavailable")
+            return
+        }
+        appFocusManager = manager
+
+        // Register listener optimistically (may work on other platforms)
+        try {
+            manager.addFocusListener(
+                { appType, active ->
+                    if (appType == CarAppFocusManager.APP_FOCUS_TYPE_NAVIGATION) {
+                        logger.d(TAG, "Listener callback: active=$active")
+                        val owner = readNavFocusOwnerFromDumpsys()
+                        emitIfChanged(owner, trigger = if (active) "user" else "system")
+                    }
+                },
+                CarAppFocusManager.APP_FOCUS_TYPE_NAVIGATION,
+            )
+            logger.d(TAG, "OnAppFocusChangedListener registered (optimistic)")
+        } catch (e: Exception) {
+            logger.w(TAG, "addFocusListener failed: ${e.message}")
+        }
+
+        // Emit initial state
+        val initialOwner = readNavFocusOwnerFromDumpsys()
+        emitIfChanged(initialOwner, trigger = "system")
+        logger.i(TAG, "Initial state: owner=${previousOwner ?: "none"}, type=$previousSourceType")
+
+        // Poll loop — fallback for when callbacks don't fire (MIB4 multi-user)
+        while (currentCoroutineContext().isActive) {
+            delay(POLL_INTERVAL_MS)
+            val owner = readNavFocusOwnerFromDumpsys()
+            emitIfChanged(owner, trigger = "system")
+        }
     }
 
     override fun stop() {
-        try {
-            appFocusListener?.let { listener ->
-                appFocusManager?.removeFocusListener(listener)
-            }
-        } catch (e: Exception) {
-            logger.d(TAG, "removeFocusListener failed: ${e.message}")
-        }
-
-        try {
-            projectionStatusListener?.let { listener ->
-                projectionManager?.unregisterProjectionStatusListener(listener)
-            }
-        } catch (e: Exception) {
-            logger.d(TAG, "unregisterProjectionStatusListener failed: ${e.message}")
-        }
-
-        try {
-            clusterNavigationListener?.let { listener ->
-                clusterHomeManager?.unregisterClusterNavigationStateListener(listener)
-            }
-        } catch (e: Exception) {
-            logger.d(TAG, "unregisterClusterNavigationStateListener failed: ${e.message}")
-        }
-
-        appFocusListener = null
-        projectionStatusListener = null
-        clusterNavigationListener = null
         appFocusManager = null
-        projectionManager = null
-        clusterHomeManager = null
-
         car?.disconnect()
         car = null
-
-        callbackExecutor.shutdownNow()
         logger.i(TAG, "Stopped")
     }
 
-    private fun connectProjection(carInstance: Car) {
-        try {
-            val manager = carInstance.getCarManager(Car.PROJECTION_SERVICE) as? CarProjectionManager
-            if (manager == null) {
-                logger.w(TAG, "CarProjectionManager unavailable")
-                return
-            }
-            projectionManager = manager
-
-            projectionStatusListener = CarProjectionManager.ProjectionStatusListener { _, _, statuses ->
-                val active = statuses.firstOrNull { it.isActive }
-                val activePackage = active?.packageName
-                if (projectionPackage == activePackage) {
-                    return@ProjectionStatusListener
-                }
-                projectionPackage = activePackage
-                logger.d(TAG, "Projection status changed: activePackage=$activePackage")
-
-                val owners = safeGetNavigationOwners()
-                emitFocusChanged(owners, trigger = "system")
-            }
-
-            manager.registerProjectionStatusListener(requireNotNull(projectionStatusListener))
-            logger.i(TAG, "CarProjectionManager listener registered")
-        } catch (e: SecurityException) {
-            logger.w(TAG, "No permission for projection status monitoring: ${e.message}")
-        } catch (e: Exception) {
-            logger.e(TAG, "Failed to register CarProjectionManager listener: ${e.message}")
-        }
-    }
-
-    private fun connectAppFocus(carInstance: Car) {
-        try {
-            val manager = carInstance.getCarManager(Car.APP_FOCUS_SERVICE) as? CarAppFocusManager
-            if (manager == null) {
-                logger.w(TAG, "CarAppFocusManager unavailable")
-                return
-            }
-            appFocusManager = manager
-
-            appFocusListener = CarAppFocusManager.OnAppFocusChangedListener { appType, active ->
-                if (appType != CarAppFocusManager.APP_FOCUS_TYPE_NAVIGATION) return@OnAppFocusChangedListener
-                val owners = safeGetNavigationOwners()
-                emitFocusChanged(owners = owners, trigger = if (active) "user" else "system")
-            }
-
-            manager.addFocusListener(
-                requireNotNull(appFocusListener),
-                CarAppFocusManager.APP_FOCUS_TYPE_NAVIGATION,
-            )
-
-            // Emit initial focus state
-            val initialOwners = safeGetNavigationOwners()
-            emitFocusChanged(owners = initialOwners, trigger = "system")
-            logger.i(TAG, "CarAppFocusManager listener registered")
-        } catch (e: SecurityException) {
-            logger.w(TAG, "No permission for CarAppFocusManager navigation focus: ${e.message}")
-        } catch (e: Exception) {
-            logger.e(TAG, "Failed to register CarAppFocusManager listener: ${e.message}")
-        }
-    }
-
-    private fun connectClusterNavigation(carInstance: Car) {
-        try {
-            val manager = carInstance.getCarManager(Car.CLUSTER_HOME_SERVICE) as? ClusterHomeManager
-            if (manager == null) {
-                logger.w(TAG, "ClusterHomeManager unavailable")
-                return
-            }
-            clusterHomeManager = manager
-
-            clusterNavigationListener = ClusterHomeManager.ClusterNavigationStateListener { stateBytes ->
-                val hasState = stateBytes.isNotEmpty()
-                val payloadSize = stateBytes.size
-                lastClusterPayloadSize = payloadSize
-
-                if (hasClusterNavState == hasState) return@ClusterNavigationStateListener
-                hasClusterNavState = hasState
-                logger.d(TAG, "Cluster navigation state changed: hasState=$hasState, payloadSize=$payloadSize")
-                emitRouteStateChanged(hasState)
-            }
-
-            manager.registerClusterNavigationStateListener(
-                callbackExecutor,
-                requireNotNull(clusterNavigationListener),
-            )
-            logger.i(TAG, "ClusterHomeManager navigation listener registered")
-        } catch (e: SecurityException) {
-            logger.w(TAG, "No permission for cluster navigation state monitoring: ${e.message}")
-        } catch (e: Exception) {
-            logger.e(TAG, "Failed to register ClusterHomeManager listener: ${e.message}")
-        }
-    }
-
-    private fun safeGetNavigationOwners(): List<String> {
-        val manager = appFocusManager ?: return emptyList()
+    /**
+     * Parses `dumpsys car_service` AppFocusService section to find the navigation focus owner.
+     *
+     * Format:
+     * ```
+     * **AppFocusService**
+     * mActiveAppTypes:{1}
+     * ClientInfo{mUid=1301000,mPid=4953,owned={1}}
+     * ```
+     *
+     * If mActiveAppTypes contains "1" (NAV), we find the ClientInfo that owns {1}
+     * and resolve its PID to a package name.
+     */
+    private fun readNavFocusOwnerFromDumpsys(): String? {
         return try {
-            manager.getAppTypeOwner(CarAppFocusManager.APP_FOCUS_TYPE_NAVIGATION)
-                .orEmpty()
-                .distinct()
-                .sorted()
+            val process = Runtime.getRuntime().exec(
+                arrayOf("sh", "-c", "dumpsys car_service | sed -n '/AppFocusService/,/^[*]/p'"),
+            )
+            val output = process.inputStream.bufferedReader().readText()
+            process.waitFor()
+
+            if (output.isBlank()) {
+                logger.d(TAG, "dumpsys AppFocus section empty")
+                return null
+            }
+
+            parseNavOwnerFromSection(output)
         } catch (e: Exception) {
-            logger.d(TAG, "getAppTypeOwner failed: ${e.message}")
-            emptyList()
+            logger.d(TAG, "dumpsys car_service failed: ${e.message}")
+            null
         }
     }
 
-    private fun emitFocusChanged(owners: List<String>, trigger: String) {
-        val inferred = inferSource(owners, projectionPackage)
-        val currentOwner = inferred.owner
-        val currentSourceType = inferred.sourceType
+    private fun parseNavOwnerFromSection(section: String): String? {
+        // Check if navigation focus type (1) is active
+        val activeTypesMatch = ACTIVE_TYPES_PATTERN.find(section)
+        if (activeTypesMatch == null) {
+            logger.d(TAG, "No mActiveAppTypes found in section (${section.length} chars)")
+            return null
+        }
+        val activeTypes = activeTypesMatch.groupValues[1]
+        if (!activeTypes.split(",").map { it.trim() }.contains("1")) return null
 
-        // Only emit if something actually changed
-        if (previousOwner == currentOwner && previousSourceType == currentSourceType) {
+        // Find the ClientInfo that owns navigation focus type 1
+        for (match in CLIENT_INFO_PATTERN.findAll(section)) {
+            val pid = match.groupValues[2].toIntOrNull() ?: continue
+            val ownedTypes = match.groupValues[3]
+            if (ownedTypes.split(",").map { it.trim() }.contains("1")) {
+                val pkg = resolvePackageForPid(pid)
+                logger.d(TAG, "Nav focus owner PID=$pid -> pkg=$pkg")
+                return pkg
+            }
+        }
+        logger.d(TAG, "mActiveAppTypes has 1 but no ClientInfo owns it")
+        return null
+    }
+
+    private fun resolvePackageForPid(pid: Int): String? {
+        return try {
+            val process = Runtime.getRuntime().exec(
+                arrayOf("sh", "-c", "dumpsys activity processes | grep 'PID #$pid:'"),
+            )
+            val output = process.inputStream.bufferedReader().readText().trim()
+            process.waitFor()
+            // Format: "PID #4953: ProcessRecord{hash 4953:com.aptiv.carplay/u13s1000}"
+            val match = PID_PACKAGE_PATTERN.find(output)
+            match?.groupValues?.get(1)
+        } catch (e: Exception) {
+            logger.d(TAG, "Failed to resolve PID $pid: ${e.message}")
+            null
+        }
+    }
+
+    private fun emitIfChanged(owner: String?, trigger: String) {
+        val sourceType = classifyOwner(owner)
+
+        if (owner == previousOwner && sourceType == previousSourceType) {
             return
         }
 
-        // Determine the reason: gained focus, lost focus, or changed owner
         val reason = when {
-            previousOwner == null && currentOwner != null -> "gained"
-            previousOwner != null && currentOwner == null -> "lost"
-            previousOwner != null && currentOwner != null -> "changed"
+            previousOwner == null && owner != null -> "gained"
+            previousOwner != null && owner == null -> "lost"
+            previousOwner != null && owner != null -> "changed"
             else -> "unknown"
         }
 
@@ -253,12 +231,9 @@ class NavigationCollector @Inject constructor(
                     "metadata" to mapOf(
                         "reason" to reason,
                         "previousOwner" to previousOwner,
-                        "currentOwner" to currentOwner,
+                        "currentOwner" to owner,
                         "previousSourceType" to previousSourceType,
-                        "currentSourceType" to currentSourceType,
-                        "projectionPackage" to projectionPackage,
-                        "hasClusterNavigationState" to hasClusterNavState,
-                        "clusterPayloadSizeBytes" to lastClusterPayloadSize,
+                        "currentSourceType" to sourceType,
                     ),
                 ),
             ),
@@ -266,95 +241,38 @@ class NavigationCollector @Inject constructor(
 
         logger.i(
             TAG,
-            "Navigation focus changed: reason=$reason, " +
-                "${previousSourceType ?: "none"}/${previousOwner ?: "null"} -> " +
-                "$currentSourceType/${currentOwner ?: "null"}",
+            "Navigation focus: reason=$reason, " +
+                "$previousSourceType/${previousOwner ?: "none"} -> $sourceType/${owner ?: "none"}",
         )
 
-        previousOwner = currentOwner
-        previousSourceType = currentSourceType
-    }
-
-    private fun emitRouteStateChanged(routeActive: Boolean) {
-        val owners = safeGetNavigationOwners()
-        val inferred = inferSource(owners, projectionPackage)
-
-        telemetry.send(
-            TelemetryEvent(
-                signalId = signalId,
-                payload = mapOf(
-                    "actionName" to "Navigation_RouteStateChanged",
-                    "trigger" to "system",
-                    "metadata" to mapOf(
-                        "routeActive" to routeActive,
-                        "owner" to inferred.owner,
-                        "sourceType" to inferred.sourceType,
-                        "clusterPayloadSizeBytes" to lastClusterPayloadSize,
-                    ),
-                ),
-            ),
-        )
-
-        logger.i(
-            TAG,
-            "Navigation route state changed: routeActive=$routeActive, " +
-                "sourceType=${inferred.sourceType}, owner=${inferred.owner ?: "null"}, " +
-                "clusterPayloadSizeBytes=$lastClusterPayloadSize",
-        )
+        previousOwner = owner
+        previousSourceType = sourceType
     }
 
     companion object {
         private const val TAG = "NavigationCollector"
+        private const val POLL_INTERVAL_MS = 5_000L
 
-        private val NOISE_PACKAGES = setOf(
-            "android",
-            "com.android.car",
-            "com.android.car.settings",
-            "com.android.providers.settings",
-            "com.android.location.fused",
-        )
+        private val ACTIVE_TYPES_PATTERN = Regex("""mActiveAppTypes:\{([^}]*)\}""")
+        private val CLIENT_INFO_PATTERN = Regex("""ClientInfo\{mUid=(\d+),mPid=(\d+),owned=\{([^}]*)\}\}""")
+        // Matches: "PID #4953: ProcessRecord{hash 4953:com.aptiv.carplay/u13s1000}"
+        private val PID_PACKAGE_PATTERN = Regex("""ProcessRecord\{[0-9a-f]+ \d+:([^/]+)/""")
 
         private val CARPLAY_HINTS = listOf("carplay")
         private val ANDROID_AUTO_HINTS = listOf("androidauto", "android.auto")
-        private val NATIVE_NAV_HINTS = listOf("nav", "maps", "map", "waze", "tomtom", "here")
+        private val NATIVE_NAV_HINTS = listOf(
+            "mapbox", "here", "nav", "maps", "map", "waze", "tomtom",
+        )
 
-        private fun inferSource(owners: List<String>, projectionPackage: String?): SourceInference {
-            val ownersFiltered = owners.filterNot { it in NOISE_PACKAGES }
-
-            if (projectionPackage != null) {
-                return SourceInference(
-                    owner = projectionPackage,
-                    sourceType = when {
-                        containsAny(projectionPackage, CARPLAY_HINTS) -> "carplay"
-                        containsAny(projectionPackage, ANDROID_AUTO_HINTS) -> "android_auto"
-                        else -> "projection"
-                    },
-                )
-            }
-
-            val candidate = ownersFiltered.firstOrNull {
-                containsAny(it, CARPLAY_HINTS + ANDROID_AUTO_HINTS + NATIVE_NAV_HINTS)
-            } ?: ownersFiltered.firstOrNull()
-
-            val sourceType = when {
-                candidate == null -> "none"
-                containsAny(candidate, CARPLAY_HINTS) -> "carplay"
-                containsAny(candidate, ANDROID_AUTO_HINTS) -> "android_auto"
-                containsAny(candidate, NATIVE_NAV_HINTS) -> "native"
+        private fun classifyOwner(owner: String?): String {
+            if (owner == null) return "none"
+            val normalized = owner.lowercase()
+            return when {
+                CARPLAY_HINTS.any { normalized.contains(it) } -> "carplay"
+                ANDROID_AUTO_HINTS.any { normalized.contains(it) } -> "android_auto"
+                NATIVE_NAV_HINTS.any { normalized.contains(it) } -> "native"
                 else -> "unknown"
             }
-
-            return SourceInference(owner = candidate, sourceType = sourceType)
-        }
-
-        private fun containsAny(value: String, hints: List<String>): Boolean {
-            val normalized = value.lowercase()
-            return hints.any { normalized.contains(it) }
         }
     }
-
-    private data class SourceInference(
-        val owner: String?,
-        val sourceType: String,
-    )
 }
