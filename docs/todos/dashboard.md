@@ -5,6 +5,24 @@ Last updated: 2026-05-11
 
 ---
 
+
+## Features
+- make sure the suspend to ram is displayed nicely. Also make sure to count how often it goes into suspend to ram before doing full shut down, is it always 7? 
+- make sure that the network traffic is seperated better (apn, transport)
+
+- Add System_ Analytics
+- Add Analytics for if displays are on, off, standby as sepete graph or to app lifecycle
+- Add bluetooth, wifi, tethering on, off and tx,rx
+- Add connection flows (sankey for devices)
+- [ ] Add GPS analytics view
+- [ ] Add Navigation analytics view
+- [ ] Add Media analytics view
+- [ ] Show VHALs over time — plot property values as time series, highlight errors/wrong values
+- [ ] Remove the session bar at the top — replace with a time/date range slider
+- [ ] Assess DataCollector performance impact — from the collected data, determine if the component affects the emulator significantly
+---
+
+
 ## Bugs
 
 - [ ] Reset through home button doesn't work again
@@ -20,23 +38,4 @@ Last updated: 2026-05-11
 
 ---
 
-## Features
 
-- Update network traffic, to also show wifi, cellular and tethering
-- Add System_ Analytics
-- Add Analytics for if displays are on, off, standby as sepete graph or to app lifecycle
-- Add bluetooth, wifi, tethering on, off and tx,rx
-- Add connection flows (sankey for devices)
-- [ ] Add GPS analytics view
-- [ ] Add Navigation analytics view
-- [ ] Add Media analytics view
-- [ ] Show VHALs over time — plot property values as time series, highlight errors/wrong values
-- [ ] Remove the session bar at the top — replace with a time/date range slider
-- [ ] Assess DataCollector performance impact — from the collected data, determine if the component affects the emulator significantly
----
-
-## Styling
-
-- [ ] Add Porsche logo
-- [ ] Make the text and time bar color black
-- [ ] Make the displays dropdown fixed width

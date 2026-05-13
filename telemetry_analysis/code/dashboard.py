@@ -10,7 +10,7 @@ Usage:
 import json
 import sys
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -27,26 +27,31 @@ from dash import Dash, Input, Output, State, callback, dcc, html, ALL, ctx, Patc
 
 DISPLAY_NAMES = {
     0: "Center Screen",
-    1: "Instrument Cluster",
-    2: "Passenger Screen",
-    3: "Rear Passenger",
+    2: "Instrument Cluster",
+    3: "Passenger Screen",
+    4: "Fond / Rear",
+    5: "Virtual",
 }
 
 DISPLAY_COLORS = {
     0: "#0f9b8e",
-    1: "#f39c12",
-    2: "#5b8def",
-    3: "#9b59b6",
+    2: "#f39c12",
+    3: "#5b8def",
+    4: "#9b59b6",
+    5: "#888888",
 }
 
 DISPLAY_RESOLUTIONS = {
     0: (1920, 720),
-    1: (1920, 1080),
-    2: (1920, 720),
-    3: (1280, 768),
+    2: (1920, 1080),
+    3: (1920, 720),
+    4: (1280, 768),
 }
 
-TOUCH_EXCLUDED_DISPLAYS = {1}
+TOUCH_EXCLUDED_DISPLAYS = {2, 5}
+
+# Timezone offset: car records in UTC but represents Berlin local time (UTC+2 CEST)
+TZ_OFFSET = pd.Timedelta(hours=2)
 
 # ── Porsche Design System Tokens (Light Theme) ──────────────────────────────
 # Font: Porsche Next via CDN | Colors: PDS light-theme palette
@@ -141,7 +146,7 @@ def normalize(events: list[dict]) -> dict[str, pd.DataFrame]:
     for action, rows in grouped.items():
         df = pd.DataFrame(rows)
         if "timestamp" in df.columns:
-            df["datetime"] = pd.to_datetime(df["timestamp"], unit="ms")
+            df["datetime"] = pd.to_datetime(df["timestamp"], unit="ms") + TZ_OFFSET
             df = df.sort_values("datetime").reset_index(drop=True)
         dfs[action] = df
     return dfs
@@ -164,7 +169,13 @@ def expand_samples(df: pd.DataFrame) -> pd.DataFrame:
         return df
     result = pd.DataFrame(expanded_rows)
     if "timestampMillis" in result.columns:
-        result["datetime"] = pd.to_datetime(result["timestampMillis"], unit="ms")
+        result["datetime"] = pd.to_datetime(result["timestampMillis"], unit="ms") + TZ_OFFSET
+        result = result.sort_values("datetime").reset_index(drop=True)
+    elif "gpsTimeMillis" in result.columns:
+        result["datetime"] = pd.to_datetime(result["gpsTimeMillis"], unit="ms") + TZ_OFFSET
+        result = result.sort_values("datetime").reset_index(drop=True)
+    elif "ts" in result.columns:
+        result["datetime"] = pd.to_datetime(result["ts"], unit="ms") + TZ_OFFSET
         result = result.sort_values("datetime").reset_index(drop=True)
     return result
 
@@ -173,6 +184,42 @@ def _short_name(pkg: str) -> str:
     if not pkg or pkg == "nan" or pkg == "None":
         return "unknown"
     return pkg
+
+
+def _get_memory_df(dfs: dict) -> pd.DataFrame:
+    """Get memory data from either new System_Memory or legacy Memory_Usage format."""
+    # New format: System_Memory with samples [ts, totalMb, availableMb, usedMb, thresholdMb, lowMemory]
+    df_sys = dfs.get("System_Memory", pd.DataFrame())
+    if not df_sys.empty:
+        expanded = expand_samples(df_sys)
+        if "availableMb" in expanded.columns:
+            expanded = expanded.rename(columns={"availableMb": "availMb", "totalMb": "totalMem_mb"})
+            if "totalMem_mb" in expanded.columns:
+                expanded["totalMem"] = pd.to_numeric(expanded["totalMem_mb"], errors="coerce") * 1024 * 1024 * 1000
+            return expanded
+    # Legacy format: Memory_Usage with sampleSchema [timestampMillis, totalMem, availMb, ...]
+    df_legacy = dfs.get("Memory_Usage", pd.DataFrame())
+    if not df_legacy.empty:
+        return expand_samples(df_legacy)
+    return pd.DataFrame()
+
+
+def _get_cpu_df(dfs: dict) -> pd.DataFrame:
+    """Get CPU data from either new System_CpuLoad or legacy CPU_Usage format."""
+    # New format: System_CpuLoad with samples [ts, ownCpuPct]
+    df_sys = dfs.get("System_CpuLoad", pd.DataFrame())
+    if not df_sys.empty:
+        expanded = expand_samples(df_sys)
+        if "ownCpuPct" in expanded.columns:
+            expanded = expanded.rename(columns={"ownCpuPct": "usagePct"})
+            if "ts" in expanded.columns and "datetime" not in expanded.columns:
+                expanded["datetime"] = pd.to_datetime(expanded["ts"], unit="ms") + TZ_OFFSET
+            return expanded
+    # Legacy format: CPU_Usage
+    df_legacy = dfs.get("CPU_Usage", pd.DataFrame())
+    if not df_legacy.empty:
+        return expand_samples(df_legacy)
+    return pd.DataFrame()
 
 
 # ---------------------------------------------------------------------------
@@ -189,8 +236,8 @@ print(f"[Dashboard] {len(RAW_EVENTS)} events, {len(DFS)} action types")
 ALL_TIMESTAMPS = [e.get("timestamp") for e in RAW_EVENTS if e.get("timestamp")]
 MIN_TS = min(ALL_TIMESTAMPS) if ALL_TIMESTAMPS else 0
 MAX_TS = max(ALL_TIMESTAMPS) if ALL_TIMESTAMPS else 0
-MIN_DT = pd.to_datetime(MIN_TS, unit="ms")
-MAX_DT = pd.to_datetime(MAX_TS, unit="ms")
+MIN_DT = pd.to_datetime(MIN_TS, unit="ms") + TZ_OFFSET
+MAX_DT = pd.to_datetime(MAX_TS, unit="ms") + TZ_OFFSET
 
 # Extract all apps from focus data
 df_focus_global = DFS.get("App_FocusChanged", pd.DataFrame())
@@ -202,9 +249,12 @@ if not df_focus_global.empty:
     ALL_APPS = sorted(set(p for p in pkgs if p and p != "nan"))
 
 ALL_DISPLAYS = sorted(
-    d for d in range(4)
-    if not df_focus_global.empty
-)
+    set(
+        int(r.get("current.displayId") or 0)
+        for _, r in df_focus_global.iterrows()
+        if pd.notna(r.get("current.displayId"))
+    )
+) if not df_focus_global.empty else []
 
 # Extract all trigger types
 ALL_TRIGGERS = sorted(set(
@@ -226,7 +276,7 @@ SESSION_RANGES = sorted(
 
 # Pre-compute datetime session ranges for gap detection
 SESSION_DT_RANGES = [
-    (pd.to_datetime(s, unit="ms"), pd.to_datetime(e, unit="ms"))
+    (pd.to_datetime(s, unit="ms") + TZ_OFFSET, pd.to_datetime(e, unit="ms") + TZ_OFFSET)
     for s, e in SESSION_RANGES
 ]
 
@@ -239,13 +289,51 @@ def _session_end_for(dt):
     return dt
 
 
+def _compute_active_periods() -> list[tuple]:
+    """Compute active (non-suspended) time periods from Power_StateChanged events.
+    Returns list of (start_dt, end_dt) tuples where the system was ON."""
+    df_power = DFS.get("Power_StateChanged", pd.DataFrame())
+    if df_power.empty or "datetime" not in df_power.columns:
+        # No power data — assume always active across sessions
+        return list(SESSION_DT_RANGES) if SESSION_DT_RANGES else [(MIN_DT, MAX_DT)]
+
+    periods = []
+    current_start = MIN_DT
+    for _, row in df_power.sort_values("datetime").iterrows():
+        state = str(row.get("state", "")).upper()
+        dt = row["datetime"]
+        if state in ("SUSPEND_ENTER", "SHUTDOWN_ENTER"):
+            # End of an active period
+            if current_start is not None:
+                periods.append((current_start, dt))
+                current_start = None
+        elif state in ("SUSPEND_EXIT", "ON") and current_start is None:
+            current_start = dt
+    # Close final period
+    if current_start is not None:
+        periods.append((current_start, MAX_DT))
+    return periods if periods else [(MIN_DT, MAX_DT)]
+
+
+ACTIVE_PERIODS = _compute_active_periods()
+
+
+def _clamp_to_active(start_dt, end_dt):
+    """Clamp a time range to the active periods. Returns end clamped to the
+    end of the active period containing start_dt, or start_dt if in a gap."""
+    for ap_start, ap_end in ACTIVE_PERIODS:
+        if ap_start <= start_dt <= ap_end:
+            return min(end_dt, ap_end)
+    return start_dt  # In a gap — zero-width
+
+
 def _build_range_selector_fig():
     """Build a plotly figure with session bars and a built-in rangeslider for time selection."""
     fig = go.Figure()
     # Add session bars as visual indicators in the main area and rangeslider
     for i, (s, e) in enumerate(SESSION_RANGES):
-        s_dt = pd.to_datetime(s, unit="ms")
-        e_dt = pd.to_datetime(e, unit="ms")
+        s_dt = pd.to_datetime(s, unit="ms") + TZ_OFFSET
+        e_dt = pd.to_datetime(e, unit="ms") + TZ_OFFSET
         fig.add_trace(go.Bar(
             x=[s_dt + (e_dt - s_dt) / 2],
             y=[1],
@@ -256,8 +344,8 @@ def _build_range_selector_fig():
             hoverinfo="text",
             text=[f"Session {i + 1}: {s_dt.strftime('%H:%M:%S')} — {e_dt.strftime('%H:%M:%S')}"],
         ))
-    min_dt = pd.to_datetime(MIN_TS, unit="ms")
-    max_dt = pd.to_datetime(MAX_TS, unit="ms")
+    min_dt = pd.to_datetime(MIN_TS, unit="ms") + TZ_OFFSET
+    max_dt = pd.to_datetime(MAX_TS, unit="ms") + TZ_OFFSET
     fig.update_layout(
         xaxis=dict(
             range=[min_dt, max_dt],
@@ -440,6 +528,12 @@ app.layout = html.Div(
                 dcc.Tab(label="Vehicle & GPS", value="vehicle",
                         style={"backgroundColor": PDS_BACKGROUND, "color": PDS_CONTRAST_LOW, "padding": "8px 16px", "border": f"1px solid {PDS_BORDER}"},
                         selected_style={"backgroundColor": PDS_BACKGROUND, "color": PDS_PRIMARY, "padding": "8px 16px", "borderBottom": f"2px solid {PDS_BRAND}", "fontWeight": "600"}),
+                dcc.Tab(label="Audio & Media", value="audio_media",
+                        style={"backgroundColor": PDS_BACKGROUND, "color": PDS_CONTRAST_LOW, "padding": "8px 16px", "border": f"1px solid {PDS_BORDER}"},
+                        selected_style={"backgroundColor": PDS_BACKGROUND, "color": PDS_PRIMARY, "padding": "8px 16px", "borderBottom": f"2px solid {PDS_BRAND}", "fontWeight": "600"}),
+                dcc.Tab(label="Display & Power", value="display_power",
+                        style={"backgroundColor": PDS_BACKGROUND, "color": PDS_CONTRAST_LOW, "padding": "8px 16px", "border": f"1px solid {PDS_BORDER}"},
+                        selected_style={"backgroundColor": PDS_BACKGROUND, "color": PDS_PRIMARY, "padding": "8px 16px", "borderBottom": f"2px solid {PDS_BRAND}", "fontWeight": "600"}),
                 dcc.Tab(label="Collector Stats", value="overview",
                         style={"backgroundColor": PDS_BACKGROUND, "color": PDS_CONTRAST_LOW, "padding": "8px 16px", "border": f"1px solid {PDS_BORDER}"},
                         selected_style={"backgroundColor": PDS_BACKGROUND, "color": PDS_PRIMARY, "padding": "8px 16px", "borderBottom": f"2px solid {PDS_BRAND}", "fontWeight": "600"}),
@@ -581,8 +675,8 @@ def update_dashboard(relayout_data, displays, apps, triggers, active_tab, zoom_d
     end_ts = max(MIN_TS, min(end_ts, MAX_TS))
 
     # Build range label
-    s_dt = pd.to_datetime(start_ts, unit="ms")
-    e_dt = pd.to_datetime(end_ts, unit="ms")
+    s_dt = pd.to_datetime(start_ts, unit="ms") + TZ_OFFSET
+    e_dt = pd.to_datetime(end_ts, unit="ms") + TZ_OFFSET
     range_label = f"Selected: {s_dt.strftime('%H:%M:%S')} — {e_dt.strftime('%H:%M:%S')}"
 
     events, dfs = _filter_events([start_ts, end_ts])
@@ -640,6 +734,10 @@ def update_dashboard(relayout_data, displays, apps, triggers, active_tab, zoom_d
         content = _build_network_tab(dfs, apps, zoom_range)
     elif active_tab == "vehicle":
         content = _build_vehicle_tab(dfs, zoom_range)
+    elif active_tab == "audio_media":
+        content = _build_audio_media_tab(dfs, zoom_range)
+    elif active_tab == "display_power":
+        content = _build_display_power_tab(dfs, zoom_range)
     else:
         content = html.P("Select a tab")
 
@@ -716,8 +814,8 @@ def _build_timeline_tab(events, dfs, displays, zoom_range=None):
     # Compute shared x-axis range from all events
     all_ts = [e.get("timestamp") for e in events if e.get("timestamp")]
     if all_ts:
-        x_min = pd.to_datetime(min(all_ts), unit="ms")
-        x_max = pd.to_datetime(max(all_ts), unit="ms")
+        x_min = pd.to_datetime(min(all_ts), unit="ms") + TZ_OFFSET
+        x_max = pd.to_datetime(max(all_ts), unit="ms") + TZ_OFFSET
     else:
         x_min, x_max = MIN_DT, MAX_DT
 
@@ -746,13 +844,12 @@ def _build_timeline_tab(events, dfs, displays, zoom_range=None):
             for i in range(len(df_d)):
                 pkg = _short_name(str(df_d.iloc[i]["current_pkg"]))
                 start = df_d.iloc[i]["datetime"]
-                session_end = _session_end_for(start)
-                # End is the next event OR session boundary, whichever comes first
+                # End is the next event OR active-period boundary, whichever comes first
                 if i + 1 < len(df_d):
                     next_dt = df_d.iloc[i + 1]["datetime"]
-                    end = min(next_dt, session_end)
+                    end = _clamp_to_active(start, next_dt)
                 else:
-                    end = session_end
+                    end = _clamp_to_active(start, _session_end_for(start))
                 dur_s = (end - start).total_seconds()
                 if 0 < dur_s < 86400:
                     color = app_color_map.get(pkg, "#888")
@@ -837,9 +934,8 @@ def _build_timeline_tab(events, dfs, displays, zoom_range=None):
             children.append(_full(_timeline_graph(fig_dropped, 250, zoom_range)))
 
     # --- 4) Available Memory ---
-    df_mem = dfs.get("Memory_Usage", pd.DataFrame())
-    if not df_mem.empty:
-        mem_exp = expand_samples(df_mem)
+    mem_exp = _get_memory_df(dfs)
+    if not mem_exp.empty:
         if "availMb" in mem_exp.columns and "datetime" in mem_exp.columns:
             mem_exp["availGb"] = pd.to_numeric(mem_exp["availMb"], errors="coerce") / 1000
             fig_mem = go.Figure()
@@ -850,10 +946,14 @@ def _build_timeline_tab(events, dfs, displays, zoom_range=None):
             ))
             # Add total memory as dashed red line
             total_gb = None
-            if "totalMem" in df_mem.columns:
-                total_vals = df_mem["totalMem"].dropna()
+            if "totalMem" in mem_exp.columns:
+                total_vals = mem_exp["totalMem"].dropna()
                 if len(total_vals) > 0:
-                    total_gb = int(total_vals.iloc[0]) / (1024 * 1024 * 1000)
+                    total_gb = float(total_vals.iloc[0]) / (1024 * 1024 * 1000)
+            elif "totalMem_mb" in mem_exp.columns:
+                total_vals = pd.to_numeric(mem_exp["totalMem_mb"], errors="coerce").dropna()
+                if len(total_vals) > 0:
+                    total_gb = float(total_vals.iloc[0]) / 1000
             if total_gb:
                 fig_mem.add_hline(y=total_gb, line_dash="dash", line_color="red",
                                   annotation_text=f"Total: {total_gb:.1f} GB")
@@ -878,18 +978,29 @@ def _build_timeline_tab(events, dfs, displays, zoom_range=None):
             dt = row.get("datetime")
             ts = row.get("timestamp")
             apps_data = row.get("apps", [])
+            schema = row.get("schema")
             if not apps_data or not isinstance(apps_data, list):
                 continue
             for a in apps_data:
-                if not isinstance(a, dict):
-                    continue
-                pkgs = a.get("packages", [])
-                uid = a.get("uid", 0)
-                label = _short_name(pkgs[0]) if pkgs else f"uid:{uid}"
-                app_traffic_rows.append({
-                    "datetime": dt, "timestamp": ts, "app": label,
-                    "rx": a.get("rxBytes", 0), "tx": a.get("txBytes", 0),
-                })
+                if isinstance(a, dict):
+                    # Legacy format: list of dicts
+                    pkgs = a.get("packages", [])
+                    uid = a.get("uid", 0)
+                    label = _short_name(pkgs[0]) if pkgs else f"uid:{uid}"
+                    app_traffic_rows.append({
+                        "datetime": dt, "timestamp": ts, "app": label,
+                        "rx": a.get("rxBytes", 0), "tx": a.get("txBytes", 0),
+                    })
+                elif isinstance(a, list) and schema:
+                    # New format: list of arrays with schema
+                    rec = dict(zip(schema, a))
+                    pkgs = rec.get("packages", [])
+                    uid = rec.get("uid", 0)
+                    label = _short_name(pkgs[0]) if pkgs else f"uid:{uid}"
+                    app_traffic_rows.append({
+                        "datetime": dt, "timestamp": ts, "app": label,
+                        "rx": rec.get("rxBytes", 0), "tx": rec.get("txBytes", 0),
+                    })
 
         if app_traffic_rows:
             df_at = pd.DataFrame(app_traffic_rows).sort_values(["app", "timestamp"])
@@ -952,7 +1063,7 @@ def _build_overview_tab(events, dfs, zoom_range=None):
         sig = e.get("signalId", "unknown").split(".")[-1]
         ts = e.get("timestamp")
         if ts:
-            dt = pd.to_datetime(ts, unit="ms")
+            dt = pd.to_datetime(ts, unit="ms") + TZ_OFFSET
             all_rows.append({"collector": sig, "datetime": dt})
             size_rows.append({"collector": sig, "datetime": dt,
                               "bytes": len(json.dumps(e, default=str))})
@@ -1023,17 +1134,16 @@ def _build_overview_tab(events, dfs, zoom_range=None):
     for e in events:
         ts = e.get("timestamp")
         if ts:
-            event_rows.append({"datetime": pd.to_datetime(ts, unit="ms")})
+            event_rows.append({"datetime": pd.to_datetime(ts, unit="ms") + TZ_OFFSET})
     if event_rows:
         df_rate = pd.DataFrame(event_rows)
         df_rate["time_bin"] = df_rate["datetime"].dt.floor("1min")
         rate = df_rate.groupby("time_bin").size().reset_index(name="events_per_min")
 
         # Event Rate vs Available Memory
-        df_mem = dfs.get("Memory_Usage", pd.DataFrame())
+        mem_exp = _get_memory_df(dfs)
         fig_ev_mem = go.Figure()
-        if not df_mem.empty:
-            mem_exp = expand_samples(df_mem)
+        if not mem_exp.empty:
             if "availMb" in mem_exp.columns and "datetime" in mem_exp.columns:
                 mem_exp["availMb"] = pd.to_numeric(mem_exp["availMb"], errors="coerce")
                 mem_exp["availGb"] = mem_exp["availMb"] / 1000
@@ -1087,9 +1197,8 @@ def _build_overview_tab(events, dfs, zoom_range=None):
         children.append(_row(_synced_graph(fig_ev_mem, 400, zoom_range), _synced_graph(fig_ev_fps, 400, zoom_range)))
 
         # Event Rate vs CPU (if available)
-        df_cpu = dfs.get("CPU_Usage", pd.DataFrame())
-        if not df_cpu.empty:
-            cpu_exp = expand_samples(df_cpu)
+        cpu_exp = _get_cpu_df(dfs)
+        if not cpu_exp.empty:
             if "usagePct" in cpu_exp.columns and "datetime" in cpu_exp.columns:
                 cpu_exp["usagePct"] = pd.to_numeric(cpu_exp["usagePct"], errors="coerce")
                 cpu_exp["time_bin"] = cpu_exp["datetime"].dt.floor("1min")
@@ -1218,12 +1327,11 @@ def _build_app_usage_tab(dfs, displays, apps, zoom_range=None):
             pkg = str(df_disp.iloc[i]["current_pkg"])
             short = _short_name(pkg)
             start = df_disp.iloc[i]["datetime"]
-            session_end = _session_end_for(start)
             if i + 1 < len(df_disp):
                 next_dt = df_disp.iloc[i + 1]["datetime"]
-                end = min(next_dt, session_end)
+                end = _clamp_to_active(start, next_dt)
             else:
-                end = session_end
+                end = _clamp_to_active(start, _session_end_for(start))
             dur_s = (end - start).total_seconds()
             if 0 < dur_s < 86400:
                 color = app_color_map.get(short, "#888")
@@ -1458,20 +1566,23 @@ def _build_performance_tab(dfs, zoom_range=None):
     children = []
 
     # Memory
-    df_mem = dfs.get("Memory_Usage", pd.DataFrame())
+    mem_exp = _get_memory_df(dfs)
     fig_mem = go.Figure()
-    if not df_mem.empty:
-        mem_exp = expand_samples(df_mem)
+    if not mem_exp.empty:
         if "availMb" in mem_exp.columns and "datetime" in mem_exp.columns:
             mem_exp["availGb"] = pd.to_numeric(mem_exp["availMb"], errors="coerce") / 1000
             fig_mem.add_trace(go.Scatter(x=mem_exp["datetime"], y=mem_exp["availGb"],
                                          mode="lines+markers", name="Available",
                                          line=dict(color="#0f9b8e")))
             total_gb = None
-            if "totalMem" in df_mem.columns:
-                total_vals = df_mem["totalMem"].dropna()
+            if "totalMem" in mem_exp.columns:
+                total_vals = mem_exp["totalMem"].dropna()
                 if len(total_vals) > 0:
-                    total_gb = int(total_vals.iloc[0]) / (1024 * 1024 * 1000)
+                    total_gb = float(total_vals.iloc[0]) / (1024 * 1024 * 1000)
+            elif "totalMem_mb" in mem_exp.columns:
+                total_vals = pd.to_numeric(mem_exp["totalMem_mb"], errors="coerce").dropna()
+                if len(total_vals) > 0:
+                    total_gb = float(total_vals.iloc[0]) / 1000
             if total_gb:
                 fig_mem.add_hline(y=total_gb, line_dash="dash", line_color="red",
                                   annotation_text=f"Total: {total_gb:.1f} GB")
@@ -1493,9 +1604,8 @@ def _build_performance_tab(dfs, zoom_range=None):
             children.append(_full(_synced_graph(fig_dropped, 350, zoom_range)))
 
     # CPU Usage
-    df_cpu = dfs.get("CPU_Usage", pd.DataFrame())
-    if not df_cpu.empty:
-        cpu_exp = expand_samples(df_cpu)
+    cpu_exp = _get_cpu_df(dfs)
+    if not cpu_exp.empty:
         if "usagePct" in cpu_exp.columns and "datetime" in cpu_exp.columns:
             cpu_exp["usagePct"] = pd.to_numeric(cpu_exp["usagePct"], errors="coerce")
             fig_cpu = px.line(cpu_exp.dropna(subset=["usagePct"]),
@@ -1587,20 +1697,108 @@ def _build_network_tab(dfs, apps, zoom_range=None):
 
     children.append(_row(_synced_graph(fig_signal, 350, zoom_range), _synced_graph(fig_quality, 350, zoom_range)))
 
-    # Total traffic
-    df_wifi = dfs.get("Network_WifiTotal", pd.DataFrame())
+    # All Network Totals (WiFi, Mobile, Hotspot, Ethernet)
     fig_traffic = go.Figure()
-    if not df_wifi.empty and "datetime" in df_wifi.columns:
-        for col, name, color in [("rxBytes", "WiFi RX", "#0f9b8e"), ("txBytes", "WiFi TX", "#5b8def")]:
-            if col in df_wifi.columns:
+    net_sources = [
+        ("Network_WifiTotal", "WiFi", "#0f9b8e"),
+        ("Network_MobileTotal", "Mobile", "#e74c3c"),
+        ("Network_VehicleHotspotTotal", "Vehicle Hotspot", "#9b59b6"),
+        ("Network_EthernetTotal", "Ethernet", "#f39c12"),
+    ]
+    for action_name, label, color in net_sources:
+        df_net = dfs.get(action_name, pd.DataFrame())
+        if not df_net.empty and "datetime" in df_net.columns:
+            if "rxBytes" in df_net.columns:
                 fig_traffic.add_trace(go.Scatter(
-                    x=df_wifi["datetime"], y=df_wifi[col] / (1024 * 1024),
-                    mode="lines", name=name, line=dict(color=color)))
-        fig_traffic.update_layout(title="Network Traffic Over Time", yaxis_title="MB")
+                    x=df_net["datetime"], y=pd.to_numeric(df_net["rxBytes"], errors="coerce") / (1024 * 1024),
+                    mode="lines", name=f"{label} RX", line=dict(color=color, width=2)))
+            if "txBytes" in df_net.columns:
+                fig_traffic.add_trace(go.Scatter(
+                    x=df_net["datetime"], y=pd.to_numeric(df_net["txBytes"], errors="coerce") / (1024 * 1024),
+                    mode="lines", name=f"{label} TX", line=dict(color=color, width=1, dash="dot")))
+    fig_traffic.update_layout(title="Network Traffic by Interface (Cumulative MB)", yaxis_title="MB")
 
-    # Per-app traffic
+    # Vehicle Hotspot Clients
+    df_hotspot = dfs.get("Network_VehicleHotspotTotal", pd.DataFrame())
+    fig_hotspot = go.Figure()
+    if not df_hotspot.empty and "connectedClients" in df_hotspot.columns and "datetime" in df_hotspot.columns:
+        fig_hotspot.add_trace(go.Scatter(
+            x=df_hotspot["datetime"],
+            y=pd.to_numeric(df_hotspot["connectedClients"], errors="coerce"),
+            mode="lines+markers", name="Connected Clients",
+            line=dict(color="#9b59b6", width=2),
+        ))
+        fig_hotspot.update_layout(title="Vehicle Hotspot — Connected Clients", yaxis_title="Clients")
+
+    children.append(_row(_synced_graph(fig_traffic, 350, zoom_range), _synced_graph(fig_hotspot, 350, zoom_range)))
+
+    # APN Traffic — extracted from Network_PerAppTraffic apps entries
     df_perapp = dfs.get("Network_PerAppTraffic", pd.DataFrame())
+    fig_apn = go.Figure()
+    fig_transport = go.Figure()
+    if not df_perapp.empty and "apps" in df_perapp.columns:
+        # Parse all app entries to get APN and networkType breakdowns over time
+        apn_rows = []
+        for _, row in df_perapp.sort_values("timestamp").iterrows():
+            dt = row.get("datetime")
+            apps_data = row.get("apps", [])
+            schema = row.get("schema")
+            if not apps_data:
+                continue
+            for a in apps_data:
+                if isinstance(a, dict):
+                    rec = a
+                elif isinstance(a, list) and schema:
+                    rec = dict(zip(schema, a))
+                else:
+                    continue
+                apn_rows.append({
+                    "datetime": dt,
+                    "apn": rec.get("apn", "unknown"),
+                    "networkType": rec.get("networkType", "unknown"),
+                    "rx": rec.get("rxBytes", 0),
+                    "tx": rec.get("txBytes", 0),
+                })
+        if apn_rows:
+            df_apn_data = pd.DataFrame(apn_rows)
+            # APN Traffic over time (cumulative per APN)
+            apn_colors = ["#0f9b8e", "#5b8def", "#e74c3c", "#f39c12", "#9b59b6", "#2ecc71"]
+            apn_totals = df_apn_data.groupby(["datetime", "apn"])[["rx", "tx"]].sum().reset_index()
+            for i, apn_name in enumerate(sorted(apn_totals["apn"].unique())):
+                apn_df = apn_totals[apn_totals["apn"] == apn_name].sort_values("datetime")
+                color = apn_colors[i % len(apn_colors)]
+                fig_apn.add_trace(go.Scatter(
+                    x=apn_df["datetime"], y=apn_df["rx"].cumsum() / (1024 * 1024),
+                    mode="lines", name=f"{apn_name} RX",
+                    line=dict(color=color, width=2)))
+                fig_apn.add_trace(go.Scatter(
+                    x=apn_df["datetime"], y=apn_df["tx"].cumsum() / (1024 * 1024),
+                    mode="lines", name=f"{apn_name} TX",
+                    line=dict(color=color, width=1, dash="dot")))
+            fig_apn.update_layout(title="Traffic by APN (Cumulative MB)", yaxis_title="MB")
+
+            # Transport type traffic over time
+            transport_colors = {"ethernet": "#f39c12", "wifi": "#0f9b8e", "other": "#888",
+                                "mobile": "#e74c3c", "bluetooth": "#5b8def"}
+            transport_totals = df_apn_data.groupby(["datetime", "networkType"])[["rx", "tx"]].sum().reset_index()
+            for nt in sorted(transport_totals["networkType"].unique()):
+                nt_df = transport_totals[transport_totals["networkType"] == nt].sort_values("datetime")
+                color = transport_colors.get(nt, "#888")
+                fig_transport.add_trace(go.Scatter(
+                    x=nt_df["datetime"], y=nt_df["rx"].cumsum() / (1024 * 1024),
+                    mode="lines", name=f"{nt} RX",
+                    line=dict(color=color, width=2)))
+                fig_transport.add_trace(go.Scatter(
+                    x=nt_df["datetime"], y=nt_df["tx"].cumsum() / (1024 * 1024),
+                    mode="lines", name=f"{nt} TX",
+                    line=dict(color=color, width=1, dash="dot")))
+            fig_transport.update_layout(title="Traffic by Transport Type (Cumulative MB)", yaxis_title="MB")
+
+    children.append(_row(_synced_graph(fig_apn, 350, zoom_range), _synced_graph(fig_transport, 350, zoom_range)))
+
+    # Per-app traffic with APN + Transport breakdown
     fig_perapp = go.Figure()
+    perapp_height = 350
     if not df_perapp.empty and "apps" in df_perapp.columns:
         # Filter by zoom range if set
         df_pa = df_perapp
@@ -1609,42 +1807,54 @@ def _build_network_tab(dfs, apps, zoom_range=None):
             z_end = pd.to_datetime(zoom_range[1])
             df_pa = df_pa[(df_pa["datetime"] >= z_start) & (df_pa["datetime"] <= z_end)]
 
-        # rxBytes/txBytes are already per-interval deltas from the collector — just sum them
         app_traffic_rows = []
         for _, row in df_pa.sort_values("timestamp").iterrows():
             apps_data = row.get("apps", [])
+            schema = row.get("schema")
             if not apps_data:
                 continue
             for a in apps_data:
-                if not isinstance(a, dict):
+                if isinstance(a, dict):
+                    rec = a
+                elif isinstance(a, list) and schema:
+                    rec = dict(zip(schema, a))
+                else:
                     continue
-                pkgs = a.get("packages", [])
-                label = pkgs[0] if pkgs else f"uid:{a.get('uid', 0)}"
+                pkgs = rec.get("packages", [])
+                label = pkgs[0] if pkgs else f"uid:{rec.get('uid', 0)}"
                 if apps and label not in apps:
                     continue
-                app_traffic_rows.append({"app": label,
-                                         "rx": a.get("rxBytes", 0), "tx": a.get("txBytes", 0)})
+                app_traffic_rows.append({
+                    "app": label,
+                    "apn": rec.get("apn", "unknown"),
+                    "networkType": rec.get("networkType", "unknown"),
+                    "rx": rec.get("rxBytes", 0),
+                    "tx": rec.get("txBytes", 0),
+                })
 
         if app_traffic_rows:
             df_at = pd.DataFrame(app_traffic_rows)
-            app_sums = df_at.groupby("app")[["rx", "tx"]].sum()
+            # Show per-app, broken down by APN + networkType
+            df_at["key"] = df_at["app"] + " [" + df_at["apn"] + "/" + df_at["networkType"] + "]"
+            app_sums = df_at.groupby("key")[["rx", "tx"]].sum()
 
             traffic_data = []
             for label in app_sums.index:
                 rx_mb = app_sums.loc[label, "rx"] / (1024 * 1024)
                 tx_mb = app_sums.loc[label, "tx"] / (1024 * 1024)
                 if rx_mb + tx_mb > 0.001:
-                    traffic_data.append({"App": _short_name(label), "RX (MB)": rx_mb, "TX (MB)": tx_mb})
+                    traffic_data.append({"App": label, "RX (MB)": rx_mb, "TX (MB)": tx_mb})
             if traffic_data:
                 df_t = pd.DataFrame(traffic_data).sort_values("RX (MB)", ascending=True)
                 fig_perapp.add_trace(go.Bar(y=df_t["App"], x=df_t["RX (MB)"], name="RX",
                                             orientation="h", marker_color="#0f9b8e"))
                 fig_perapp.add_trace(go.Bar(y=df_t["App"], x=df_t["TX (MB)"], name="TX",
                                             orientation="h", marker_color="#5b8def"))
-                fig_perapp.update_layout(title="Per-App Traffic (MB)", barmode="group",
-                                         height=max(300, len(df_t) * 45), xaxis_title="MB")
+                fig_perapp.update_layout(title="Per-App Traffic by APN/Transport (MB)", barmode="group",
+                                         height=max(300, len(df_t) * 35), xaxis_title="MB")
+                perapp_height = max(350, len(df_t) * 35 + 80)
 
-    children.append(_row(_synced_graph(fig_traffic, 350, zoom_range), _graph(fig_perapp, 350)))
+    children.append(_full(_graph(fig_perapp, perapp_height)))
 
     # App Lifecycle vs Network Traffic
     df_focus_lc = dfs.get("App_FocusChanged", pd.DataFrame())
@@ -1655,17 +1865,25 @@ def _build_network_tab(dfs, apps, zoom_range=None):
             dt = row.get("datetime")
             ts = row.get("timestamp")
             apps_data = row.get("apps", [])
+            schema = row.get("schema")
             if not apps_data or not isinstance(apps_data, list):
                 continue
             for a in apps_data:
-                if not isinstance(a, dict):
-                    continue
-                pkgs = a.get("packages", [])
-                label = pkgs[0] if pkgs else f"uid:{a.get('uid', 0)}"
-                if apps and label not in apps:
-                    continue
-                traffic_rows.append({"datetime": dt, "timestamp": ts, "app": label,
-                                     "rx": a.get("rxBytes", 0), "tx": a.get("txBytes", 0)})
+                if isinstance(a, dict):
+                    pkgs = a.get("packages", [])
+                    label = pkgs[0] if pkgs else f"uid:{a.get('uid', 0)}"
+                    if apps and label not in apps:
+                        continue
+                    traffic_rows.append({"datetime": dt, "timestamp": ts, "app": label,
+                                         "rx": a.get("rxBytes", 0), "tx": a.get("txBytes", 0)})
+                elif isinstance(a, list) and schema:
+                    rec = dict(zip(schema, a))
+                    pkgs = rec.get("packages", [])
+                    label = pkgs[0] if pkgs else f"uid:{rec.get('uid', 0)}"
+                    if apps and label not in apps:
+                        continue
+                    traffic_rows.append({"datetime": dt, "timestamp": ts, "app": label,
+                                         "rx": rec.get("rxBytes", 0), "tx": rec.get("txBytes", 0)})
         if traffic_rows:
             df_tr = pd.DataFrame(traffic_rows).sort_values(["app", "timestamp"])
             df_tr["total"] = df_tr["rx"] + df_tr["tx"]
@@ -1719,39 +1937,70 @@ def _build_network_tab(dfs, apps, zoom_range=None):
 
 def _build_vehicle_tab(dfs, zoom_range=None):
     children = []
-    df_vhal = dfs.get("VHAL_ValuesChanged", pd.DataFrame())
     fig_speed = go.Figure()
     fig_gear = go.Figure()
 
-    if not df_vhal.empty and "changes" in df_vhal.columns:
-        vhal_rows = []
-        for _, row in df_vhal.iterrows():
+    # Collect VHAL property data from multiple sources
+    vhal_rows = []
+
+    # New format: VHAL_ValueChanged (single change events)
+    df_vhal_single = dfs.get("VHAL_ValueChanged", pd.DataFrame())
+    if not df_vhal_single.empty:
+        for _, row in df_vhal_single.iterrows():
+            vhal_rows.append({
+                "timestampMillis": row.get("timestamp"),
+                "property": row.get("property", ""),
+                "previous": row.get("previous"),
+                "current": row.get("current"),
+            })
+
+    # New format: VHAL_SampledBatch (batched sampled values)
+    df_vhal_batch = dfs.get("VHAL_SampledBatch", pd.DataFrame())
+    if not df_vhal_batch.empty:
+        for _, row in df_vhal_batch.iterrows():
+            schema = row.get("sampleSchema", ["ts", "property", "value"])
+            samples = row.get("samples", [])
+            if samples:
+                for sample in samples:
+                    r = dict(zip(schema, sample))
+                    vhal_rows.append({
+                        "timestampMillis": r.get("ts"),
+                        "property": r.get("property", ""),
+                        "previous": None,
+                        "current": r.get("value"),
+                    })
+
+    # Legacy format: VHAL_ValuesChanged (batched change events)
+    df_vhal_legacy = dfs.get("VHAL_ValuesChanged", pd.DataFrame())
+    if not df_vhal_legacy.empty and "changes" in df_vhal_legacy.columns:
+        for _, row in df_vhal_legacy.iterrows():
             changes = row.get("changes", [])
             schema = row.get("sampleSchema", ["timestampMillis", "property", "previous", "current"])
             if changes:
                 for change in changes:
                     r = dict(zip(schema, change))
                     vhal_rows.append(r)
-        if vhal_rows:
-            df_props = pd.DataFrame(vhal_rows)
-            if "timestampMillis" in df_props.columns:
-                df_props["datetime"] = pd.to_datetime(df_props["timestampMillis"], unit="ms")
 
-            df_speed_data = df_props[df_props["property"] == "PERF_VEHICLE_SPEED"].copy()
-            if not df_speed_data.empty:
-                df_speed_data["current"] = pd.to_numeric(df_speed_data["current"], errors="coerce")
-                fig_speed = px.line(df_speed_data, x="datetime", y="current",
-                                    title="Vehicle Speed", markers=True)
-                fig_speed.update_layout(yaxis_title="km/h")
+    if vhal_rows:
+        df_props = pd.DataFrame(vhal_rows)
+        if "timestampMillis" in df_props.columns:
+            df_props["datetime"] = pd.to_datetime(df_props["timestampMillis"], unit="ms") + TZ_OFFSET
 
-            df_gear_data = df_props[df_props["property"] == "GEAR_SELECTION"].copy()
-            if not df_gear_data.empty:
-                gear_map = {1: "P", 2: "R", 4: "N", 8: "D"}
-                df_gear_data["gear"] = df_gear_data["current"].apply(
-                    lambda x: gear_map.get(x, str(x)) if x is not None else "?")
-                fig_gear = px.scatter(df_gear_data, x="datetime", y="gear",
-                                      title="Gear Selection", text="gear")
-                fig_gear.update_traces(marker=dict(size=12))
+        df_speed_data = df_props[df_props["property"] == "PERF_VEHICLE_SPEED"].copy()
+        if not df_speed_data.empty:
+            df_speed_data["current"] = pd.to_numeric(df_speed_data["current"], errors="coerce") * 3.6
+            fig_speed = px.line(df_speed_data, x="datetime", y="current",
+                                title="Vehicle Speed", markers=True)
+            fig_speed.update_layout(yaxis_title="km/h")
+
+        df_gear_data = df_props[df_props["property"] == "GEAR_SELECTION"].copy()
+        if not df_gear_data.empty:
+            gear_map = {1: "P", 2: "R", 4: "N", 8: "D"}
+            df_gear_data["gear"] = df_gear_data["current"].apply(
+                lambda x: gear_map.get(x, str(x)) if x is not None else "?")
+            fig_gear = px.scatter(df_gear_data, x="datetime", y="gear",
+                                  title="Gear Selection", text="gear")
+            fig_gear.update_traces(marker=dict(size=12))
 
     children.append(_row(_synced_graph(fig_speed, 350, zoom_range), _synced_graph(fig_gear, 250, zoom_range)))
 
@@ -1803,9 +2052,8 @@ def _build_vehicle_tab(dfs, zoom_range=None):
                 children.append(_full(_synced_graph(fig_acc, 250, zoom_range)))
 
     # CPU Usage
-    df_cpu = dfs.get("CPU_Usage", pd.DataFrame())
-    if not df_cpu.empty:
-        cpu_exp = expand_samples(df_cpu)
+    cpu_exp = _get_cpu_df(dfs)
+    if not cpu_exp.empty:
         if "usagePct" in cpu_exp.columns and "datetime" in cpu_exp.columns:
             cpu_exp["usagePct"] = pd.to_numeric(cpu_exp["usagePct"], errors="coerce")
             fig_cpu = px.line(cpu_exp.dropna(subset=["usagePct"]),
@@ -1855,6 +2103,375 @@ def _build_vehicle_tab(dfs, zoom_range=None):
                                       title="DataCollector Threads", markers=True)
                 fig_threads.update_traces(line=dict(color="#5b8def"))
                 children.append(_full(_synced_graph(fig_threads, 250, zoom_range)))
+
+    return html.Div(children)
+
+
+def _build_audio_media_tab(dfs, zoom_range=None):
+    children = []
+
+    # --- Audio Volume Groups Over Time ---
+    df_audio_snap = dfs.get("Audio_Snapshot", pd.DataFrame())
+    df_audio_change = dfs.get("Audio_StateChanged", pd.DataFrame())
+
+    # Combine volume data from snapshots and state changes
+    vol_rows = []
+    if not df_audio_snap.empty:
+        for _, row in df_audio_snap.iterrows():
+            groups = row.get("carVolumeGroups")
+            if isinstance(groups, dict):
+                for grp, val in groups.items():
+                    if isinstance(val, str) and "/" in val:
+                        current, maximum = val.split("/", 1)
+                        try:
+                            vol_rows.append({"datetime": row.get("datetime"), "group": grp,
+                                             "volume": int(current), "max": int(maximum)})
+                        except (ValueError, TypeError):
+                            pass
+
+    if not df_audio_change.empty:
+        for _, row in df_audio_change.iterrows():
+            current = row.get("current")
+            if isinstance(current, dict):
+                groups = current.get("carVolumeGroups") if isinstance(current, dict) else None
+                if isinstance(groups, dict):
+                    for grp, val in groups.items():
+                        if isinstance(val, str) and "/" in val:
+                            cur_v, max_v = val.split("/", 1)
+                            try:
+                                vol_rows.append({"datetime": row.get("datetime"), "group": grp,
+                                                 "volume": int(cur_v), "max": int(max_v)})
+                            except (ValueError, TypeError):
+                                pass
+
+    if vol_rows:
+        df_vol = pd.DataFrame(vol_rows)
+        if "datetime" in df_vol.columns and not df_vol.empty:
+            fig_vol = go.Figure()
+            for grp in sorted(df_vol["group"].unique()):
+                grp_data = df_vol[df_vol["group"] == grp].sort_values("datetime")
+                fig_vol.add_trace(go.Scatter(
+                    x=grp_data["datetime"], y=grp_data["volume"],
+                    mode="lines+markers", name=grp.replace("_", " ").title(),
+                ))
+            fig_vol.update_layout(title="Audio Volume Groups Over Time", yaxis_title="Level")
+            children.append(_full(_synced_graph(fig_vol, 350, zoom_range)))
+
+    # --- Audio Output Devices ---
+    if not df_audio_snap.empty and "outputDevices" in df_audio_snap.columns:
+        device_counts = defaultdict(int)
+        for _, row in df_audio_snap.iterrows():
+            devices = row.get("outputDevices")
+            if isinstance(devices, list):
+                for d in devices:
+                    device_counts[str(d)] += 1
+        if device_counts:
+            fig_devices = go.Figure()
+            names = list(device_counts.keys())
+            counts = [device_counts[n] for n in names]
+            fig_devices.add_trace(go.Bar(x=names, y=counts, marker_color="#0f9b8e"))
+            fig_devices.update_layout(title="Audio Output Devices (Snapshot Count)")
+            children.append(_full(_graph(fig_devices, 300)))
+
+    # --- Media Playback State ---
+    df_media_state = dfs.get("Media_StateChanged", pd.DataFrame())
+    if not df_media_state.empty and "datetime" in df_media_state.columns:
+        fig_media_state = go.Figure()
+        states = df_media_state.apply(
+            lambda r: str(r.get("state", r.get("current", "?"))), axis=1
+        )
+        packages = df_media_state.apply(
+            lambda r: _short_name(str(r.get("package", ""))), axis=1
+        )
+        fig_media_state.add_trace(go.Scatter(
+            x=df_media_state["datetime"], y=states,
+            mode="markers+lines", name="State",
+            text=packages, marker=dict(size=8, color="#5b8def"),
+        ))
+        fig_media_state.update_layout(title="Media Playback State", yaxis_title="State")
+        children.append(_full(_synced_graph(fig_media_state, 300, zoom_range)))
+
+    # --- Media Track Changes ---
+    df_media_track = dfs.get("Media_TrackChanged", pd.DataFrame())
+    if not df_media_track.empty and "datetime" in df_media_track.columns:
+        # Show track change events as vertical markers
+        fig_tracks = go.Figure()
+        labels = df_media_track.apply(
+            lambda r: _short_name(str(
+                (r.get("current") or {}).get("package", "") if isinstance(r.get("current"), dict) else r.get("current.package", "")
+            )), axis=1
+        )
+        fig_tracks.add_trace(go.Scatter(
+            x=df_media_track["datetime"], y=[1] * len(df_media_track),
+            mode="markers", name="Track Change",
+            text=labels, marker=dict(size=10, color="#e74c3c", symbol="diamond"),
+        ))
+        fig_tracks.update_layout(
+            title="Media Track Changes",
+            yaxis=dict(showticklabels=False, range=[0, 2]),
+        )
+        children.append(_full(_synced_graph(fig_tracks, 200, zoom_range)))
+
+    # --- Media Position Jumps ---
+    df_pos = dfs.get("Media_PositionJumped", pd.DataFrame())
+    if not df_pos.empty and "datetime" in df_pos.columns:
+        if "deltaMs" in df_pos.columns:
+            df_pos["deltaMs"] = pd.to_numeric(df_pos["deltaMs"], errors="coerce")
+            df_pos["deltaSec"] = df_pos["deltaMs"] / 1000
+            fig_jumps = px.scatter(df_pos.dropna(subset=["deltaSec"]),
+                                   x="datetime", y="deltaSec",
+                                   color="direction" if "direction" in df_pos.columns else None,
+                                   title="Media Position Jumps (seconds)")
+            fig_jumps.update_traces(marker=dict(size=10))
+            children.append(_full(_synced_graph(fig_jumps, 300, zoom_range)))
+
+    # --- Navigation Focus ---
+    df_nav = dfs.get("Navigation_FocusChanged", pd.DataFrame())
+    if not df_nav.empty and "datetime" in df_nav.columns:
+        fig_nav = go.Figure()
+        nav_labels = df_nav.apply(
+            lambda r: f"{r.get('reason', '?')}: {_short_name(str(r.get('currentOwner', '')))}", axis=1
+        )
+        source_types = df_nav.apply(lambda r: str(r.get("currentSourceType", "?")), axis=1)
+        fig_nav.add_trace(go.Scatter(
+            x=df_nav["datetime"], y=source_types,
+            mode="markers+lines", name="Nav Source",
+            text=nav_labels, marker=dict(size=10, color="#f39c12"),
+        ))
+        fig_nav.update_layout(title="Navigation Focus Changes", yaxis_title="Source Type")
+        children.append(_full(_synced_graph(fig_nav, 250, zoom_range)))
+
+    if not children:
+        children.append(html.P("No audio/media/navigation data available.", style={"color": "#888"}))
+
+    return html.Div(children)
+
+
+def _build_display_power_tab(dfs, zoom_range=None):
+    children = []
+
+    # --- Display State Changes (Gantt-like) ---
+    df_disp_state = dfs.get("Display_StateChanged", pd.DataFrame())
+    df_disp_snap = dfs.get("Display_StateSnapshot", pd.DataFrame())
+
+    # Combine state data
+    state_rows = []
+    for df_src in [df_disp_snap, df_disp_state]:
+        if df_src is None or df_src.empty:
+            continue
+        for _, row in df_src.iterrows():
+            dt = row.get("datetime")
+            current = row.get("current")
+            if isinstance(current, dict):
+                for display_name, state in current.items():
+                    state_rows.append({"datetime": dt, "display": display_name, "state": str(state)})
+            else:
+                # Try flattened keys like "current.center"
+                for col in row.index:
+                    if col.startswith("current."):
+                        display_name = col.replace("current.", "")
+                        state_rows.append({"datetime": dt, "display": display_name, "state": str(row[col])})
+
+    if state_rows:
+        df_states = pd.DataFrame(state_rows).sort_values("datetime")
+        # Normalize standby variants to "standby"
+        df_states["state"] = df_states["state"].apply(
+            lambda s: "standby" if "standby" in s.lower() else s.lower()
+        )
+        displays_found = sorted(df_states["display"].unique())
+        state_colors = {"on": "#2ecc71", "off": "#e74c3c", "standby": "#f39c12"}
+
+        fig_disp = go.Figure()
+        legend_added = set()
+
+        for idx, disp in enumerate(displays_found):
+            disp_data = df_states[df_states["display"] == disp].reset_index(drop=True)
+            for i in range(len(disp_data)):
+                state = disp_data.iloc[i]["state"]
+                start = disp_data.iloc[i]["datetime"]
+                if i + 1 < len(disp_data):
+                    end = _clamp_to_active(start, disp_data.iloc[i + 1]["datetime"])
+                else:
+                    end = _clamp_to_active(start, MAX_DT)
+                dur_s = (end - start).total_seconds()
+                if dur_s > 0:
+                    color = state_colors.get(state, "#888")
+                    fig_disp.add_shape(
+                        type="rect", x0=start, x1=end,
+                        y0=idx - 0.4, y1=idx + 0.4,
+                        fillcolor=color, opacity=0.85,
+                        line=dict(width=0.5, color="#fff"),
+                    )
+                    if state not in legend_added:
+                        legend_added.add(state)
+                        fig_disp.add_trace(go.Scatter(
+                            x=[None], y=[None], mode="markers",
+                            marker=dict(size=12, color=color, symbol="square"),
+                            name=state.title(), showlegend=True,
+                        ))
+
+        fig_disp.update_layout(
+            title="Display States Over Time",
+            height=100 * len(displays_found) + 80,
+            yaxis=dict(
+                tickvals=list(range(len(displays_found))),
+                ticktext=[d.title() for d in displays_found],
+                range=[-0.5, len(displays_found) - 0.5],
+            ),
+            xaxis=dict(type="date"),
+            legend=dict(orientation="h", y=-0.15, x=0),
+            margin=dict(l=100, r=30, t=50, b=60),
+        )
+        children.append(_full(_synced_graph(fig_disp, 100 * len(displays_found) + 80, zoom_range)))
+
+    # --- Display Brightness ---
+    df_bright = dfs.get("Display_BrightnessSnapshot", pd.DataFrame())
+    if not df_bright.empty and "datetime" in df_bright.columns:
+        fig_bright = go.Figure()
+        brightness_cols = [c for c in df_bright.columns if c not in (
+            "timestamp", "datetime", "session", "signalId", "trigger", "actionName"
+        )]
+        for col in brightness_cols:
+            vals = pd.to_numeric(df_bright[col], errors="coerce")
+            if vals.notna().any():
+                fig_bright.add_trace(go.Scatter(
+                    x=df_bright["datetime"], y=vals,
+                    mode="lines+markers", name=col.title(),
+                ))
+        fig_bright.update_layout(title="Display Brightness Levels", yaxis_title="Level")
+        children.append(_full(_synced_graph(fig_bright, 300, zoom_range)))
+
+    # --- Power State Changes (includes Boot + State transitions) ---
+    df_power = dfs.get("Power_StateChanged", pd.DataFrame())
+    df_boot = dfs.get("Power_Boot", pd.DataFrame())
+    fig_power = go.Figure()
+    power_state_rows = []
+
+    # Collect Power_StateChanged events
+    if not df_power.empty and "datetime" in df_power.columns:
+        for _, row in df_power.iterrows():
+            state = str(row.get("state", row.get("current", "?")))
+            power_state_rows.append({"datetime": row["datetime"], "state": state, "type": "state"})
+
+    # Collect Power_Boot events
+    if not df_boot.empty and "datetime" in df_boot.columns:
+        for _, row in df_boot.iterrows():
+            ignition = str(row.get("ignitionState", "?"))
+            uptime_s = int(row.get("uptimeMs", 0)) / 1000
+            power_state_rows.append({
+                "datetime": row["datetime"],
+                "state": f"BOOT (ign={ignition}, uptime={uptime_s:.0f}s)",
+                "type": "boot",
+            })
+
+    if power_state_rows:
+        df_pwr = pd.DataFrame(power_state_rows).sort_values("datetime")
+        # Map states to numeric y values for a cleaner timeline
+        state_order = ["BOOT", "ON", "PRE_SHUTDOWN_PREPARE", "SHUTDOWN_PREPARE",
+                       "SUSPEND_ENTER", "POST_SUSPEND_ENTER", "SUSPEND_EXIT",
+                       "SHUTDOWN_ENTER", "POST_SHUTDOWN_ENTER"]
+        state_y = {s: i for i, s in enumerate(state_order)}
+
+        # State transitions
+        state_entries = df_pwr[df_pwr["type"] == "state"]
+        if not state_entries.empty:
+            y_vals = [state_y.get(s, len(state_order)) for s in state_entries["state"]]
+            fig_power.add_trace(go.Scatter(
+                x=state_entries["datetime"], y=y_vals,
+                mode="lines+markers", name="Power State",
+                line=dict(color="#e74c3c", width=2),
+                marker=dict(size=8),
+                text=state_entries["state"], hoverinfo="text+x",
+            ))
+
+        # Boot events (highlighted)
+        boot_entries = df_pwr[df_pwr["type"] == "boot"]
+        if not boot_entries.empty:
+            fig_power.add_trace(go.Scatter(
+                x=boot_entries["datetime"], y=[state_y.get("BOOT", 0)] * len(boot_entries),
+                mode="markers", name="Boot",
+                marker=dict(size=16, color="#2ecc71", symbol="star"),
+                text=boot_entries["state"], hoverinfo="text+x",
+            ))
+
+        fig_power.update_layout(
+            title="Power State & Boot Events",
+            yaxis=dict(tickvals=list(range(len(state_order))), ticktext=state_order),
+        )
+        children.append(_full(_synced_graph(fig_power, 350, zoom_range)))
+
+    # --- Vehicle Info (display as info cards) ---
+    df_vinfo = dfs.get("Vehicle_Info", pd.DataFrame())
+    df_sysinfo = dfs.get("System_Info", pd.DataFrame())
+    info_items = []
+    if not df_vinfo.empty:
+        last = df_vinfo.iloc[-1]
+        info_items.append(f"**Vehicle:** {last.get('make', '?')} {last.get('model', '?')} MY{last.get('model_year', '?')}")
+    if not df_sysinfo.empty:
+        last = df_sysinfo.iloc[-1]
+        info_items.append(f"**Android:** {last.get('androidVersion', '?')} (SDK {last.get('sdkLevel', '?')})")
+        info_items.append(f"**Security Patch:** {last.get('securityPatch', '?')}")
+        build = str(last.get('buildDisplay', ''))
+        if len(build) > 60:
+            build = build[:60] + "..."
+        info_items.append(f"**Build:** {build}")
+    if info_items:
+        info_div = html.Div([
+            html.H4("System Information", style={"margin": "0 0 8px 0", "color": PDS_PRIMARY}),
+            *[html.P(dcc.Markdown(item), style={"margin": "2px 0", "fontSize": "14px"}) for item in info_items],
+        ], style={**CARD_STYLE, "textAlign": "left", "flex": "none", "width": "100%", "marginBottom": "16px"})
+        children.append(info_div)
+
+    # --- Connectivity Transport Changes ---
+    df_conn = dfs.get("Connectivity_TransportChanged", pd.DataFrame())
+    if not df_conn.empty and "datetime" in df_conn.columns:
+        fig_conn = go.Figure()
+        prev_vals = df_conn.apply(lambda r: str(r.get("previous", "?")), axis=1)
+        curr_vals = df_conn.apply(lambda r: str(r.get("current", "?")), axis=1)
+        labels = [f"{p} → {c}" for p, c in zip(prev_vals, curr_vals)]
+        fig_conn.add_trace(go.Scatter(
+            x=df_conn["datetime"], y=curr_vals,
+            mode="markers+lines", name="Transport",
+            marker=dict(size=12, color="#f39c12", symbol="diamond"),
+            text=labels, hoverinfo="text+x",
+        ))
+        fig_conn.update_layout(title="Connectivity Transport Changes", yaxis_title="Transport")
+        children.append(_full(_synced_graph(fig_conn, 250, zoom_range)))
+
+    # --- Bluetooth ---
+    df_bt = dfs.get("Bluetooth_StateChanged", pd.DataFrame())
+    if not df_bt.empty and "datetime" in df_bt.columns:
+        fig_bt = go.Figure()
+        bt_labels = df_bt.apply(
+            lambda r: str(r.get("current", r.get("state", "?"))), axis=1
+        )
+        fig_bt.add_trace(go.Scatter(
+            x=df_bt["datetime"], y=bt_labels,
+            mode="markers+lines", name="BT State",
+            marker=dict(size=10, color="#5b8def"),
+        ))
+        fig_bt.update_layout(title="Bluetooth State", yaxis_title="State")
+        children.append(_full(_synced_graph(fig_bt, 250, zoom_range)))
+
+    # --- Hotspot State ---
+    df_hs = dfs.get("Hotspot_StateChanged", pd.DataFrame())
+    if not df_hs.empty and "datetime" in df_hs.columns:
+        fig_hs = go.Figure()
+        hs_enabled = df_hs.apply(lambda r: 1 if r.get("enabled") else 0, axis=1)
+        fig_hs.add_trace(go.Scatter(
+            x=df_hs["datetime"], y=hs_enabled,
+            mode="lines+markers", name="Hotspot",
+            line=dict(color="#9b59b6", width=2),
+            marker=dict(size=8),
+        ))
+        fig_hs.update_layout(
+            title="Hotspot State", yaxis_title="Enabled",
+            yaxis=dict(tickvals=[0, 1], ticktext=["Off", "On"]),
+        )
+        children.append(_full(_synced_graph(fig_hs, 200, zoom_range)))
+
+    if not children:
+        children.append(html.P("No display/power data available.", style={"color": "#888"}))
 
     return html.Div(children)
 

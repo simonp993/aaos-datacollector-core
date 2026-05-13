@@ -4,16 +4,7 @@ Consolidated task list for the DataCollector service.
 
 
 ## Before Weekend Drive
-- what are uids? Can these uids be mapped to unique package names? 
-{
-  "schema": ["uid", "user", "packages", "networkType", "apn", "rxBytes", "txBytes"],
-  "apps": [
-    [10151, 0, ["de.porsche.datacollector.agent"], "ethernet", "apn2_oem", 87616, 46033],
-    [1310124, 13, ["com.mapbox.porsche"], "ethernet", "apn2_oem", 44385, 22412]
-  ]
-}
-
-- check files produced, and delete again for fresh start
+- Make sure that kl15, or power in general is reflected in the app usage
 
 - somehow handle that not to much data can fill up the storage (zip, delete, etc.)
 
