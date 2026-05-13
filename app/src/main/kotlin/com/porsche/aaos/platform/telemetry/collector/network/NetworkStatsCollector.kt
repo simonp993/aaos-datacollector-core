@@ -53,9 +53,9 @@ class NetworkStatsCollector @Inject constructor(
     @Volatile
     private var running = false
 
-    // Previous cumulative snapshot: uid → UidStats(rxBytes, txBytes, networkType)
+    // Previous cumulative snapshot: TrafficKey(uid, networkType, apn) → bytes
     // Delta = current - previous gives exact per-interval traffic without overlap.
-    private var previousSnapshot: Map<Int, UidStats> = emptyMap()
+    private var previousSnapshot: Map<TrafficKey, TrafficBytes> = emptyMap()
 
     // Previous tethering interface byte counters for delta calculation
     private var previousTetheringRx: Long = 0L
@@ -334,12 +334,12 @@ class NetworkStatsCollector @Inject constructor(
                         "actionName" to "Network_ApnTraffic",
                         "trigger" to "heartbeat",
                         "metadata" to mapOf(
-                            "oem" to mapOf(
+                            "apn2_oem" to mapOf(
                                 "interface" to APN_OEM_INTERFACE,
                                 "rxBytes" to deltaOemRx,
                                 "txBytes" to deltaOemTx,
                             ),
-                            "customer" to mapOf(
+                            "apn1_customer" to mapOf(
                                 "interface" to APN_CUSTOMER_INTERFACE,
                                 "rxBytes" to deltaCustomerRx,
                                 "txBytes" to deltaCustomerTx,
@@ -494,6 +494,10 @@ class NetworkStatsCollector @Inject constructor(
      * Flow: snapshot current cumulative counters → compute delta vs previous → emit only
      * UIDs with positive delta → store current as new previous. This guarantees exactly
      * one interval's worth of traffic per emission, no overlap between consecutive polls.
+     *
+     * Each app entry includes an "apn" field ("apn2_oem", "apn1_customer", or "unknown")
+     * derived from the oemManaged field in the netstats ident block. An app CAN appear
+     * twice if it uses both APNs (e.g. system UID uses both OEM_PRIVATE and default).
      */
     @Suppress("TooGenericExceptionCaught")
     private fun emitPerUidStats(userIds: List<Int>) {
@@ -514,33 +518,26 @@ class NetworkStatsCollector @Inject constructor(
                 if (ctx != null) userContexts[userId] = ctx
             }
 
-            val perApp = mutableListOf<Map<String, Any?>>()
-            for ((uid, delta) in deltas) {
-                val userId = uid.first / PER_USER_RANGE
+            val perApp = mutableListOf<List<Any?>>()
+            for ((key, delta) in deltas) {
+                val userId = key.uid / PER_USER_RANGE
                 val userContext = userContexts[userId]
                 val pkgNames = try {
-                    userContext?.packageManager?.getPackagesForUid(uid.first)?.toList()
+                    userContext?.packageManager?.getPackagesForUid(key.uid)?.toList()
                 } catch (e: Exception) {
                     null
                 }
+                val packages = pkgNames
+                    ?: SYSTEM_UID_NAMES[key.uid % PER_USER_RANGE]?.let { listOf(it) }
+                    ?: listOf("uid:${key.uid}")
                 perApp.add(
-                    buildMap {
-                        put("uid", uid.first)
-                        put("user", userId)
-                        put(
-                            "packages",
-                            pkgNames
-                                ?: SYSTEM_UID_NAMES[uid.first % PER_USER_RANGE]?.let { listOf(it) }
-                                ?: listOf("uid:${uid.first}"),
-                        )
-                        put("networkType", uid.second)
-                        put("rxBytes", delta.first)
-                        put("txBytes", delta.second)
-                    },
+                    listOf(key.uid, userId, packages, key.networkType, key.apn, delta.first, delta.second),
                 )
             }
 
-            val counts = userIds.associateWith { id -> perApp.count { it["user"] == id } }
+            val counts = userIds.associateWith { id ->
+                perApp.count { (it[1] as? Int) == id }
+            }
             logger.i(TAG, "Delta: ${perApp.size} entries" +
                 counts.entries.joinToString("") { " | user ${it.key}: ${it.value}" })
 
@@ -550,15 +547,22 @@ class NetworkStatsCollector @Inject constructor(
                     payload = mapOf(
                         "actionName" to "Network_PerAppTraffic",
                         "trigger" to "heartbeat",
-                        "metadata" to mapOf("apps" to perApp),
+                        "metadata" to mapOf(
+                            "schema" to listOf(
+                                "uid", "user", "packages", "networkType", "apn", "rxBytes", "txBytes",
+                            ),
+                            "apps" to perApp,
+                        ),
                     ),
                 ),
             )
 
             // Emit ethernet total from per-UID deltas (fallback for devices where
             // querySummaryForDevice(TYPE_ETHERNET) returns null)
-            val ethernetRx = deltas.filter { it.key.second == "ethernet" }.values.sumOf { it.first }
-            val ethernetTx = deltas.filter { it.key.second == "ethernet" }.values.sumOf { it.second }
+            val ethernetRx = deltas.filter { it.key.networkType == "ethernet" }
+                .values.sumOf { it.first }
+            val ethernetTx = deltas.filter { it.key.networkType == "ethernet" }
+                .values.sumOf { it.second }
             if (ethernetRx > 0 || ethernetTx > 0) {
                 telemetry.send(
                     TelemetryEvent(
@@ -581,25 +585,19 @@ class NetworkStatsCollector @Inject constructor(
 
     /**
      * Computes the delta between two cumulative snapshots.
-     * Key is (uid, networkType) to keep per-network-type granularity.
+     * Key is TrafficKey(uid, networkType, apn) to keep per-network-type and per-APN granularity.
      * Only returns entries where at least one of rxBytes/txBytes increased.
      * Handles counter resets gracefully (treats as new traffic from 0).
      */
     private fun computeDeltas(
-        previous: Map<Int, UidStats>,
-        current: Map<Int, UidStats>,
-    ): Map<Pair<Int, String>, Pair<Long, Long>> {
-        // Expand by (uid, networkType) for per-type deltas
-        val prevByKey = previous.mapKeys { (uid, stats) -> uid to stats.networkType }
-            .mapValues { it.value.rxBytes to it.value.txBytes }
-        val currByKey = current.mapKeys { (uid, stats) -> uid to stats.networkType }
-            .mapValues { it.value.rxBytes to it.value.txBytes }
-
-        val result = mutableMapOf<Pair<Int, String>, Pair<Long, Long>>()
-        for ((key, curr) in currByKey) {
-            val prev = prevByKey[key] ?: (0L to 0L)
-            val deltaRx = (curr.first - prev.first).coerceAtLeast(0L)
-            val deltaTx = (curr.second - prev.second).coerceAtLeast(0L)
+        previous: Map<TrafficKey, TrafficBytes>,
+        current: Map<TrafficKey, TrafficBytes>,
+    ): Map<TrafficKey, Pair<Long, Long>> {
+        val result = mutableMapOf<TrafficKey, Pair<Long, Long>>()
+        for ((key, curr) in current) {
+            val prev = previous[key]
+            val deltaRx = (curr.rxBytes - (prev?.rxBytes ?: 0L)).coerceAtLeast(0L)
+            val deltaTx = (curr.txBytes - (prev?.txBytes ?: 0L)).coerceAtLeast(0L)
             if (deltaRx > 0 || deltaTx > 0) {
                 result[key] = deltaRx to deltaTx
             }
@@ -609,47 +607,49 @@ class NetworkStatsCollector @Inject constructor(
 
     /**
      * Parses `dumpsys netstats --uid` to extract cumulative byte counters per UID,
-     * tagged with network type (wifi, mobile, vpn, other).
+     * tagged with network type and APN classification.
      *
      * The dumpsys output contains bucket history entries like:
-     *   ident=[{type=1, ...}] uid=1010187 set=FOREGROUND tag=0x0
+     *   ident=[{type=9, ..., oemManaged=OEM_PRIVATE, ...}] uid=1310124 set=FOREGROUND tag=0x0
      *     NetworkStatsHistory: bucketDuration=7200
      *       st=1778140800 rb=803444 rp=844 tb=133234 tp=603 op=0
      *
+     * Key is (uid, networkType, apn) so an app using both APNs appears as separate entries.
      * We sum all rb (received bytes) and tb (transmitted bytes) across all buckets
-     * per UID to get the cumulative total. The delta between consecutive calls gives
+     * per key to get the cumulative total. The delta between consecutive calls gives
      * exact per-interval traffic.
      */
     @Suppress("TooGenericExceptionCaught")
-    private fun parseDumpsysNetstats(): Map<Int, UidStats> {
-        val result = mutableMapOf<Int, UidStats>()
+    private fun parseDumpsysNetstats(): Map<TrafficKey, TrafficBytes> {
+        val result = mutableMapOf<TrafficKey, TrafficBytes>()
         try {
             val process = Runtime.getRuntime().exec(arrayOf("dumpsys", "netstats", "--uid"))
             val output = process.inputStream.bufferedReader().readText()
             process.waitFor()
 
-            var currentUid = -1
-            var currentNetType = "other"
+            var currentKey: TrafficKey? = null
             for (line in output.lines()) {
                 val uidMatch = UID_PATTERN.find(line)
                 if (uidMatch != null) {
-                    currentUid = uidMatch.groupValues[1].toInt()
-                    currentNetType = resolveNetworkType(line)
+                    val uid = uidMatch.groupValues[1].toInt()
+                    val netType = resolveNetworkType(line)
+                    val apn = resolveApn(line)
+                    currentKey = TrafficKey(uid, netType, apn)
                     continue
                 }
-                if (currentUid >= 0) {
+                if (currentKey != null) {
                     val statsMatch = STATS_PATTERN.find(line)
                     if (statsMatch != null) {
                         val rb = statsMatch.groupValues[1].toLong()
                         val tb = statsMatch.groupValues[2].toLong()
-                        val existing = result[currentUid]
+                        val existing = result[currentKey]
                         if (existing != null) {
-                            result[currentUid] = existing.copy(
+                            result[currentKey] = existing.copy(
                                 rxBytes = existing.rxBytes + rb,
                                 txBytes = existing.txBytes + tb,
                             )
                         } else {
-                            result[currentUid] = UidStats(rb, tb, currentNetType)
+                            result[currentKey] = TrafficBytes(rb, tb)
                         }
                     }
                 }
@@ -671,10 +671,30 @@ class NetworkStatsCollector @Inject constructor(
         }
     }
 
-    private data class UidStats(
+    /**
+     * Resolves the APN classification from the oemManaged field in the ident line.
+     * - OEM_PRIVATE → "apn2_oem" (OEM-paid, routed via tun0)
+     * - OEM_NONE → "apn1_customer" (customer-paid, default route via tun1)
+     * - Other/missing → "unknown"
+     */
+    private fun resolveApn(identLine: String): String {
+        val oemMatch = OEM_MANAGED_PATTERN.find(identLine)
+        return when (oemMatch?.groupValues?.get(1)) {
+            "OEM_PRIVATE" -> "apn2_oem"
+            "OEM_NONE" -> "apn1_customer"
+            else -> "unknown"
+        }
+    }
+
+    private data class TrafficKey(
+        val uid: Int,
+        val networkType: String,
+        val apn: String,
+    )
+
+    private data class TrafficBytes(
         val rxBytes: Long,
         val txBytes: Long,
-        val networkType: String,
     )
 
     companion object {
@@ -696,6 +716,7 @@ class NetworkStatsCollector @Inject constructor(
         private val UID_PATTERN = Regex("""\buid=(\d+)\b""")
         private val STATS_PATTERN = Regex("""rb=(\d+).*tb=(\d+)""")
         private val NET_TYPE_PATTERN = Regex("""type=(\d+)""")
+        private val OEM_MANAGED_PATTERN = Regex("""oemManaged=(OEM_\w+)""")
         private val TETHER_IFACE_PATTERN =
             Regex("""^\s+(\S+)\s+-\s+(?:TetheredState|LocalHotspotState)""", RegexOption.MULTILINE)
         private val UPSTREAM_PATTERN =
