@@ -1,6 +1,8 @@
 package com.porsche.aaos.platform.telemetry.telemetry
 
+import android.content.Context
 import com.porsche.aaos.platform.telemetry.core.logging.Logger
+import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -11,6 +13,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 class LogTelemetry @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val logger: Logger,
 ) : Telemetry {
 
@@ -23,7 +26,7 @@ class LogTelemetry @Inject constructor(
         root.put("payload", toJson(event.payload))
         root.put("timestamp", event.timestamp)
         val json = root.toString().replace("\\/", "/")
-        logger.d(TAG, json)
+        logger.i(TAG, json)
         appendToFile(json)
     }
 
@@ -46,7 +49,7 @@ class LogTelemetry @Inject constructor(
 
     private fun createLogFile(): File {
         val dateStamp = SimpleDateFormat("yyyy-MM-dd_HHmmss", Locale.US).format(Date())
-        val dir = File(LOG_DIR)
+        val dir = File(context.filesDir, LOG_SUBDIR)
         dir.mkdirs()
         enforceStorageCap(dir)
         return File(dir, "telemetry_$dateStamp.jsonl")
@@ -84,7 +87,7 @@ class LogTelemetry @Inject constructor(
 
     companion object {
         private const val TAG = "LogTelemetry"
-        private const val LOG_DIR = "/data/user/0/com.porsche.aaos.platform.telemetry/files/telemetry-logs"
+        private const val LOG_SUBDIR = "telemetry-logs"
         private const val MAX_TOTAL_BYTES = 1024L * 1024 * 1024 // 1 GB
     }
 }

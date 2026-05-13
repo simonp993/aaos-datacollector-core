@@ -27,8 +27,8 @@ class CarInfoCollector @Inject constructor(
         readProperty<String>(VhalPropertyIds.INFO_MAKE, "make")?.let { info["make"] = it }
         readProperty<String>(VhalPropertyIds.INFO_MODEL, "model")?.let { info["model"] = it }
         readProperty<Int>(VhalPropertyIds.INFO_MODEL_YEAR, "model_year")?.let { info["model_year"] = it }
-        readProperty<IntArray>(VhalPropertyIds.INFO_FUEL_TYPE, "fuel_type")?.let { info["fuel_type"] = it }
-        readProperty<IntArray>(VhalPropertyIds.INFO_EV_CONNECTOR_TYPE, "ev_connector")?.let { info["ev_connector"] = it }
+        readIntArrayProperty(VhalPropertyIds.INFO_FUEL_TYPE, "fuel_type")?.let { info["fuel_type"] = it }
+        readIntArrayProperty(VhalPropertyIds.INFO_EV_CONNECTOR_TYPE, "ev_connector")?.let { info["ev_connector"] = it }
 
         telemetry.send(
             TelemetryEvent(
@@ -92,6 +92,18 @@ class CarInfoCollector @Inject constructor(
 
     private fun <T : Any> readProperty(propertyId: Int, label: String): T? = try {
         vhalPropertyService.readProperty<T>(propertyId)
+    } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+        logger.w(TAG, "Failed to read $label ($propertyId)", e)
+        null
+    }
+
+    private fun readIntArrayProperty(propertyId: Int, label: String): IntArray? = try {
+        val raw = vhalPropertyService.readProperty<Any>(propertyId)
+        when (raw) {
+            is IntArray -> raw
+            is Array<*> -> IntArray(raw.size) { (raw[it] as Number).toInt() }
+            else -> null
+        }
     } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
         logger.w(TAG, "Failed to read $label ($propertyId)", e)
         null
