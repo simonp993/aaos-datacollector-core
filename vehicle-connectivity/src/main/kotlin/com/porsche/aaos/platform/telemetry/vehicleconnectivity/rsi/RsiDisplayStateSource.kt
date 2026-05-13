@@ -75,7 +75,6 @@ class RsiDisplayStateSource(
                     val api = optService.get().instance.main()
                     subscribePopupDisplay(api, PopupsForDisplayEnum.DRIVER_DISPLAY, DISPLAY_CENTER, localDisposables)
                     subscribePopupDisplay(api, PopupsForDisplayEnum.CO_DRIVER_DISPLAY, DISPLAY_PASSENGER, localDisposables)
-                    subscribePopupDisplay(api, PopupsForDisplayEnum.HUD_DISPLAY, DISPLAY_HUD, localDisposables)
                     subscribePopupDisplay(api, PopupsForDisplayEnum.REAR_DISPLAY, DISPLAY_FOND, localDisposables)
                 },
                 { error ->
@@ -152,6 +151,32 @@ class RsiDisplayStateSource(
                         return@subscribe
                     }
                     val valueControls = optService.get().instance.valueControls()
+
+                    // Discovery: enumerate all available valueControls at startup
+                    val discoverySub = valueControls.pollValueControlObjects()
+                        .subscribe(
+                            { page ->
+                                val items = page.getData()
+                                logger.i(TAG, "HIDService discovery: ${items.size} valueControls available")
+                                for (item in items) {
+                                    val uuid = item.id
+                                    val name = item.name
+                                    val value = item.currentValue.orElse(null)
+                                    val min = item.minValue.orElse(null)
+                                    val max = item.maxValue.orElse(null)
+                                    val known = BRIGHTNESS_UUID_MAP[uuid]
+                                    logger.i(
+                                        TAG,
+                                        "  ValueControl uuid=$uuid name=$name value=$value " +
+                                            "range=[$min..$max] known=$known",
+                                    )
+                                }
+                            },
+                            { error ->
+                                logger.w(TAG, "HIDService discovery failed: ${error.message}")
+                            },
+                        )
+                    localDisposables.add(discoverySub)
 
                     for ((uuid, display) in BRIGHTNESS_UUID_MAP) {
                         val sub = valueControls.retrieveValueControlObject(uuid)
@@ -269,7 +294,6 @@ class RsiDisplayStateSource(
         // Logical display names
         private const val DISPLAY_CENTER = "center"
         private const val DISPLAY_PASSENGER = "passenger"
-        private const val DISPLAY_HUD = "hud"
         private const val DISPLAY_FOND = "fond"
         private const val DISPLAY_CLUSTER = "cluster"
         private const val DISPLAY_CONSOLE = "console"
@@ -290,6 +314,7 @@ class RsiDisplayStateSource(
             UUID.fromString("0a3ecbf3-bb09-53a1-8834-2ba90685dde5") to DISPLAY_CENTER,
             UUID.fromString("5939f78f-0024-599a-9028-58ba8f93b7a0") to DISPLAY_PASSENGER,
             UUID.fromString("d2f5f0e6-30b2-5757-841c-c4d3c2d66f24") to DISPLAY_CONSOLE,
+            UUID.fromString("f600552e-c30a-5aa2-97ad-a45597e8e1e2") to DISPLAY_FOND,
         )
 
         /**

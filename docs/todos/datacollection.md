@@ -4,41 +4,18 @@ Consolidated task list for the DataCollector service.
 
 
 ## Before Weekend Drive
-- in this car there is a fond display, however, I'm not receiving a Display state changes, when turning it on or off. But it is a bit special in the sense, that I receive all the touch states and so on, but there is no on/off, or brightness option in the Center display, as there is for all the other displays. Maybe it is controlled differently. "displayId": 4,
-Also, this car has the following screens: hud (just display), ic (just display), center (touch and display), passenger (touch and display), fond (touch and display). What displays do you see? is there a way to reliably say which id is which? 
-especially since, e.g. the hud is not working correectly (it was off), but probably this is just incorrect. 
-Display_StateChanged	displayOff	DisplayStateCollector	▶ expand
+- what are uids? Can these uids be mapped to unique package names? 
 {
-  "signalId": "com.porsche.aaos.datacollector.core.DisplayStateCollector",
-  "payload": {
-    "actionName": "Display_StateChanged",
-    "trigger": "displayOff",
-    "metadata": {
-      "previous": {
-        "center": "off",
-        "passenger": "standby_vehiclemodel",
-        "hud": "on"
-      },
-      "current": {
-        "center": "off",
-        "passenger": "off",
-        "hud": "on"
-      },
-      "changed": "passenger"
-    }
-  },
-  "timestamp": 1778684716560
+  "schema": ["uid", "user", "packages", "networkType", "apn", "rxBytes", "txBytes"],
+  "apps": [
+    [10151, 0, ["de.porsche.datacollector.agent"], "ethernet", "apn2_oem", 87616, 46033],
+    [1310124, 13, ["com.mapbox.porsche"], "ethernet", "apn2_oem", 44385, 22412]
+  ]
 }
 
 - check files produced, and delete again for fresh start
 
-
-
-
-- File size limiter — verify the log rotation / size cap works on emulator so storage doesn't fill up. Or implement a delete mechanism, that deletes files that are older than 7 days for example. What would you suggest?
-
-
-- check if if frequency of Display_StateSnapshot and Display_BrightnessSnapshot
+- somehow handle that not to much data can fill up the storage (zip, delete, etc.)
 
 - Audio muting is not sending a signal, audio volume changes do. 
 

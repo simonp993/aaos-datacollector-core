@@ -12,6 +12,7 @@ import com.porsche.aaos.platform.telemetry.vehicleconnectivity.rsi.DisplayStateS
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -46,6 +47,7 @@ class DisplayStateCollector @Inject constructor(
     private var stateJob: Job? = null
     private var brightnessJob: Job? = null
     private var standbyJob: Job? = null
+    private var snapshotJob: Job? = null
 
     // Full state maps — always contain ALL known displays
     private var displayStates: MutableMap<String, String> = mutableMapOf()
@@ -92,9 +94,13 @@ class DisplayStateCollector @Inject constructor(
             }
         }
 
-        // Emit initial snapshot at startup only
-        emitStateSnapshot()
-        emitBrightnessSnapshot()
+        // Delay snapshot to allow RSI to deliver initial states for all displays.
+        // Displays are discovered dynamically — only those that actually respond appear.
+        snapshotJob = CoroutineScope(Dispatchers.IO).launch {
+            delay(SNAPSHOT_DELAY_MS)
+            emitStateSnapshot()
+            emitBrightnessSnapshot()
+        }
     }
 
     override fun stop() {
@@ -105,16 +111,16 @@ class DisplayStateCollector @Inject constructor(
         brightnessJob = null
         standbyJob?.cancel()
         standbyJob = null
+        snapshotJob?.cancel()
+        snapshotJob = null
         displayStateSource.stop()
         displayStandbySource.stop()
         logger.i(TAG, "DisplayStateCollector stopped")
     }
 
     private fun initializeStates() {
-        STATE_DISPLAYS.forEach { display ->
-            displayStates[display] = STATE_ON
-            popupStates[display] = STATE_ON
-        }
+        // No pre-initialization — displays are added dynamically as RSI reports them.
+        // This ensures only displays that actually exist on this vehicle appear in payloads.
     }
 
     // --- Display State (on/off from popup) ---
@@ -126,6 +132,9 @@ class DisplayStateCollector @Inject constructor(
         displayStates[event.display] = computeEffectiveState(event.display)
 
         if (displayStates == lastEmittedStates) return
+
+        // Before snapshot is emitted, accumulate state silently (discovery phase)
+        if (lastEmittedStates == null) return
 
         lastEmittedStates = displayStates.toMap()
         telemetry.send(
@@ -165,6 +174,9 @@ class DisplayStateCollector @Inject constructor(
         displayStates[event.display] = computeEffectiveState(event.display)
 
         if (displayStates == lastEmittedStates) return
+
+        // Before snapshot is emitted, accumulate state silently (discovery phase)
+        if (lastEmittedStates == null) return
 
         lastEmittedStates = displayStates.toMap()
         val trigger = when {
@@ -227,6 +239,9 @@ class DisplayStateCollector @Inject constructor(
 
         if (displayBrightness == lastEmittedBrightness) return
 
+        // Before snapshot is emitted, accumulate brightness silently (discovery phase)
+        if (lastEmittedBrightness == null) return
+
         lastEmittedBrightness = displayBrightness.toMap()
         telemetry.send(
             TelemetryEvent(
@@ -272,7 +287,6 @@ class DisplayStateCollector @Inject constructor(
         private const val STATE_OFF = "off"
         private const val STATE_STANDBY = "standby"
 
-        // Displays that have on/off state (not all have brightness)
-        private val STATE_DISPLAYS = listOf("center", "passenger", "hud", "fond")
+        private const val SNAPSHOT_DELAY_MS = 3000L
     }
 }
