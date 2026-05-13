@@ -76,6 +76,7 @@ class RsiDisplayStateSource(
                     subscribePopupDisplay(api, PopupsForDisplayEnum.DRIVER_DISPLAY, DISPLAY_CENTER, localDisposables)
                     subscribePopupDisplay(api, PopupsForDisplayEnum.CO_DRIVER_DISPLAY, DISPLAY_PASSENGER, localDisposables)
                     subscribePopupDisplay(api, PopupsForDisplayEnum.HUD_DISPLAY, DISPLAY_HUD, localDisposables)
+                    subscribePopupDisplay(api, PopupsForDisplayEnum.REAR_DISPLAY, DISPLAY_FOND, localDisposables)
                 },
                 { error ->
                     logger.e(TAG, "MCP_Popups connection error: ${error.message}")
@@ -269,6 +270,7 @@ class RsiDisplayStateSource(
         private const val DISPLAY_CENTER = "center"
         private const val DISPLAY_PASSENGER = "passenger"
         private const val DISPLAY_HUD = "hud"
+        private const val DISPLAY_FOND = "fond"
         private const val DISPLAY_CLUSTER = "cluster"
         private const val DISPLAY_CONSOLE = "console"
 

@@ -273,6 +273,6 @@ class DisplayStateCollector @Inject constructor(
         private const val STATE_STANDBY = "standby"
 
         // Displays that have on/off state (not all have brightness)
-        private val STATE_DISPLAYS = listOf("center", "passenger", "hud")
+        private val STATE_DISPLAYS = listOf("center", "passenger", "hud", "fond")
     }
 }
