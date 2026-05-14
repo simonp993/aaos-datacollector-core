@@ -52,6 +52,17 @@ import kotlinx.coroutines.isActive
  * - rxBytes = bytes received (download), txBytes = bytes sent (upload). Dashboard totals
  *   showing rx+tx represent the combined bidirectional cellular consumption.
  *
+ * ## Overhead estimate: HU measurement vs actual SIM traffic
+ * The tun interfaces are transparent pass-through (layer 3 tun, no encryption).
+ * OemNetworkPreferences routing steers packets to the right tunnel without
+ * re-encapsulating. Potential overhead between HU measurement and SIM:
+ * - VPN/IPsec encryption (50-70 bytes/pkt, 5-8%): NOT present — tun=netstats confirms
+ * - Ethernet framing HU→TCU (18 bytes/pkt, ~1.5%): stripped by TCU before cellular
+ * - TCP retransmissions at TCU↔carrier (variable, 1-3%): not visible to HU
+ * - Carrier protocol GTP-U/PDCP (~8 bytes/pkt, <1%): not counted by carriers
+ * Total expected difference: <3%. What we measure ≈ what the SIM transmits.
+ * Carrier bill should closely match apn2_oem + apn1_customer totals from this collector.
+ *
  * ## APN classification and the "unknown" bucket
  * The `oemManaged` field in netstats ident blocks classifies traffic:
  * - OEM_PRIVATE → apn2_oem: apps routed via OemNetworkPreferences (tun0, OEM-paid)
