@@ -207,8 +207,6 @@ def _get_memory_df(dfs: dict) -> pd.DataFrame:
         expanded = expand_samples(df_sys)
         if "availableMb" in expanded.columns:
             expanded = expanded.rename(columns={"availableMb": "availMb", "totalMb": "totalMem_mb"})
-            if "totalMem_mb" in expanded.columns:
-                expanded["totalMem"] = pd.to_numeric(expanded["totalMem_mb"], errors="coerce") * 1024 * 1024 * 1000
             return expanded
     # Legacy format: Memory_Usage with sampleSchema [timestampMillis, totalMem, availMb, ...]
     df_legacy = dfs.get("Memory_Usage", pd.DataFrame())
@@ -1924,10 +1922,17 @@ def _build_network_tab(dfs, apps, apn_filter, transport_filter, zoom_range=None)
                     rec = dict(zip(schema, a))
                 else:
                     continue
+                apn = rec.get("apn", "unknown")
+                net_type = rec.get("networkType", "unknown")
+                # Apply filters
+                if apn_filter and apn not in apn_filter:
+                    continue
+                if transport_filter and net_type not in transport_filter:
+                    continue
                 apn_rows.append({
                     "datetime": dt,
-                    "apn": rec.get("apn", "unknown"),
-                    "networkType": rec.get("networkType", "unknown"),
+                    "apn": apn,
+                    "networkType": net_type,
                     "rx": rec.get("rxBytes", 0),
                     "tx": rec.get("txBytes", 0),
                 })
@@ -2065,6 +2070,74 @@ def _build_network_tab(dfs, apps, apn_filter, transport_filter, zoom_range=None)
                 perapp_height = max(350, n_apps * 45 + 120)
 
     children.append(_full(_graph(fig_perapp, perapp_height)))
+
+    # Per-App Traffic Over Time (line chart showing cumulative traffic per app)
+    fig_perapp_time = go.Figure()
+    perapp_time_height = 350
+    if not df_perapp.empty and "apps" in df_perapp.columns:
+        df_pa_t = df_perapp
+        if zoom_range and "datetime" in df_pa_t.columns:
+            z_start = pd.to_datetime(zoom_range[0])
+            z_end = pd.to_datetime(zoom_range[1])
+            df_pa_t = df_pa_t[(df_pa_t["datetime"] >= z_start) & (df_pa_t["datetime"] <= z_end)]
+
+        time_traffic_rows = []
+        for _, row in df_pa_t.sort_values("timestamp").iterrows():
+            dt = row.get("datetime")
+            ts = row.get("timestamp")
+            apps_data = row.get("apps", [])
+            schema = row.get("schema")
+            if not apps_data:
+                continue
+            for a in apps_data:
+                if isinstance(a, dict):
+                    rec = a
+                elif isinstance(a, list) and schema:
+                    rec = dict(zip(schema, a))
+                else:
+                    continue
+                pkgs = rec.get("packages", [])
+                label = pkgs[0] if pkgs else f"uid:{rec.get('uid', 0)}"
+                if apps and label not in apps:
+                    continue
+                apn = rec.get("apn", "unknown")
+                net_type = rec.get("networkType", "unknown")
+                if apn_filter and apn not in apn_filter:
+                    continue
+                if transport_filter and net_type not in transport_filter:
+                    continue
+                time_traffic_rows.append({
+                    "datetime": dt, "timestamp": ts,
+                    "app": _short_name(label),
+                    "rx": rec.get("rxBytes", 0),
+                    "tx": rec.get("txBytes", 0),
+                })
+
+        if time_traffic_rows:
+            df_tt = pd.DataFrame(time_traffic_rows).sort_values(["app", "timestamp"])
+            # Compute delta (incremental bytes between snapshots) per app
+            df_tt["total"] = df_tt["rx"] + df_tt["tx"]
+            df_tt["delta"] = df_tt.groupby("app")["total"].diff().fillna(0).clip(lower=0)
+            df_tt["delta_mb"] = df_tt["delta"] / (1024 * 1024)
+            # Top apps by total traffic
+            app_sums = df_tt.groupby("app")["delta"].sum().sort_values(ascending=False)
+            top_apps_t = [a for a in app_sums.index if app_sums[a] > 1024][:10]
+            if top_apps_t:
+                for app_name in top_apps_t:
+                    app_df = df_tt[df_tt["app"] == app_name]
+                    color = APP_COLOR_MAP.get(app_name, None)
+                    fig_perapp_time.add_trace(go.Scatter(
+                        x=app_df["datetime"], y=app_df["delta_mb"],
+                        mode="lines", name=app_name,
+                        line=dict(color=color, width=2) if color else dict(width=2),
+                    ))
+                fig_perapp_time.update_layout(
+                    title="Per-App Traffic Over Time (Incremental MB)",
+                    yaxis_title="MB (delta per interval)",
+                )
+                perapp_time_height = 350
+
+    children.append(_full(_synced_graph(fig_perapp_time, perapp_time_height, zoom_range)))
 
     # App Lifecycle vs Network Traffic
     df_focus_lc = dfs.get("App_FocusChanged", pd.DataFrame())
@@ -2367,22 +2440,6 @@ def _build_audio_media_tab(dfs, zoom_range=None):
             fig_vol.update_layout(title="Audio Volume Groups Over Time", yaxis_title="Level")
             children.append(_full(_synced_graph(fig_vol, 350, zoom_range)))
 
-    # --- Audio Output Devices ---
-    if not df_audio_snap.empty and "outputDevices" in df_audio_snap.columns:
-        device_counts = defaultdict(int)
-        for _, row in df_audio_snap.iterrows():
-            devices = row.get("outputDevices")
-            if isinstance(devices, list):
-                for d in devices:
-                    device_counts[str(d)] += 1
-        if device_counts:
-            fig_devices = go.Figure()
-            names = list(device_counts.keys())
-            counts = [device_counts[n] for n in names]
-            fig_devices.add_trace(go.Bar(x=names, y=counts, marker_color="#0f9b8e"))
-            fig_devices.update_layout(title="Audio Output Devices (Snapshot Count)")
-            children.append(_full(_graph(fig_devices, 300)))
-
     # --- Media Playback State ---
     df_media_state = dfs.get("Media_StateChanged", pd.DataFrame())
     if not df_media_state.empty and "datetime" in df_media_state.columns:
@@ -2435,21 +2492,65 @@ def _build_audio_media_tab(dfs, zoom_range=None):
             fig_jumps.update_traces(marker=dict(size=10))
             children.append(_full(_synced_graph(fig_jumps, 300, zoom_range)))
 
-    # --- Navigation Focus ---
+    # --- Navigation Focus (single-row timeline) ---
     df_nav = dfs.get("Navigation_FocusChanged", pd.DataFrame())
     if not df_nav.empty and "datetime" in df_nav.columns:
-        fig_nav = go.Figure()
-        nav_labels = df_nav.apply(
-            lambda r: f"{r.get('reason', '?')}: {_short_name(str(r.get('currentOwner', '')))}", axis=1
-        )
-        source_types = df_nav.apply(lambda r: str(r.get("currentSourceType", "?")), axis=1)
-        fig_nav.add_trace(go.Scatter(
-            x=df_nav["datetime"], y=source_types,
-            mode="markers+lines", name="Nav Source",
-            text=nav_labels, marker=dict(size=10, color="#f39c12"),
-        ))
-        fig_nav.update_layout(title="Navigation Focus Changes", yaxis_title="Source Type")
-        children.append(_full(_synced_graph(fig_nav, 250, zoom_range)))
+        # Each event sets the currentOwner; it stays until the next event
+        df_nav_sorted = df_nav.sort_values("datetime").reset_index(drop=True)
+        nav_segments = []
+        for i in range(len(df_nav_sorted)):
+            row = df_nav_sorted.iloc[i]
+            raw_owner = row.get("currentOwner")
+            # NaN / None / "null" all mean no owner
+            if pd.isna(raw_owner) or raw_owner is None or str(raw_owner) in ("null", "None"):
+                owner = "none"
+            else:
+                owner = str(raw_owner)
+            start = row["datetime"]
+            if i + 1 < len(df_nav_sorted):
+                end = df_nav_sorted.iloc[i + 1]["datetime"]
+            else:
+                end = MAX_DT
+            end = _clamp_to_active(start, end)
+            dur_s = (end - start).total_seconds()
+            if dur_s > 0:
+                nav_segments.append({"owner": _short_name(owner), "start": start, "end": end, "dur_s": dur_s})
+
+        if nav_segments:
+            nav_colors = {
+                "none": "#555555",
+                "com.aptiv.carplay": "#3498db",
+                "com.mapbox.porsche": "#2ecc71",
+                "com.google.android.apps.maps": "#e74c3c",
+            }
+            default_nav_color = "#f39c12"
+            fig_nav = go.Figure()
+            legend_added = set()
+
+            for seg in nav_segments:
+                owner = seg["owner"]
+                color = nav_colors.get(owner, default_nav_color)
+                fig_nav.add_shape(
+                    type="rect", x0=seg["start"], x1=seg["end"],
+                    y0=-0.4, y1=0.4,
+                    fillcolor=color, opacity=0.85,
+                    line=dict(width=0.5, color="#fff"),
+                )
+                if owner not in legend_added:
+                    legend_added.add(owner)
+                    fig_nav.add_trace(go.Scatter(
+                        x=[None], y=[None], mode="markers",
+                        marker=dict(size=12, color=color, symbol="square"),
+                        name=owner, showlegend=True,
+                    ))
+
+            fig_nav.update_layout(
+                title="Navigation Focus",
+                yaxis=dict(showticklabels=False, range=[-0.5, 0.5]),
+                xaxis=dict(type="date"),
+                margin=_TIMELINE_MARGIN, height=150,
+            )
+            children.append(_full(_synced_graph(fig_nav, 150, zoom_range)))
 
     if not children:
         children.append(html.P("No audio/media/navigation data available.", style={"color": "#888"}))
