@@ -115,9 +115,13 @@ class NavigationCollector @Inject constructor(
             logger.w(TAG, "addFocusListener failed: ${e.message}")
         }
 
-        // Emit initial state
+        // Emit initial snapshot unconditionally so the dashboard knows the state from t=0
         val initialOwner = readNavFocusOwnerFromDumpsys()
-        emitIfChanged(initialOwner, trigger = "system")
+        emitSnapshot(initialOwner)
+
+        // Set tracking state so emitIfChanged can detect the next change
+        previousOwner = initialOwner
+        previousSourceType = classifyOwner(initialOwner)
         logger.i(TAG, "Initial state: owner=${previousOwner ?: "none"}, type=$previousSourceType")
 
         // Poll loop — fallback for when callbacks don't fire (MIB4 multi-user)
@@ -206,6 +210,24 @@ class NavigationCollector @Inject constructor(
             logger.d(TAG, "Failed to resolve PID $pid: ${e.message}")
             null
         }
+    }
+
+    private fun emitSnapshot(owner: String?) {
+        val sourceType = classifyOwner(owner)
+        telemetry.send(
+            TelemetryEvent(
+                signalId = signalId,
+                payload = mapOf(
+                    "actionName" to "Navigation_FocusSnapshot",
+                    "trigger" to "system",
+                    "metadata" to mapOf(
+                        "currentOwner" to owner,
+                        "currentSourceType" to sourceType,
+                    ),
+                ),
+            ),
+        )
+        logger.i(TAG, "Navigation focus snapshot: owner=${owner ?: "none"}, type=$sourceType")
     }
 
     private fun emitIfChanged(owner: String?, trigger: String) {
