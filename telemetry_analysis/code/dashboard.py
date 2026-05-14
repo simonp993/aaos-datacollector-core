@@ -73,6 +73,19 @@ PDS_STATE_WARNING = "#FF9B00"
 PDS_STATE_ERROR = "#E00000"
 
 PLOT_TEMPLATE = "plotly_white"
+
+# Standardized legend placement: horizontal, between title and plot area
+LEGEND_STYLE = dict(orientation="h", y=1.02, yanchor="bottom", x=0, font=dict(size=9))
+
+# Network transport colors — used wherever transport type is shown
+TRANSPORT_COLORS = {
+    "ethernet": "#f39c12",
+    "wifi": "#0f9b8e",
+    "mobile": "#e74c3c",
+    "bluetooth": "#5b8def",
+    "other": "#888888",
+}
+
 CARD_STYLE = {
     "backgroundColor": PDS_BACKGROUND,
     "borderRadius": "4px",
@@ -247,6 +260,10 @@ if not df_focus_global.empty:
         lambda r: str(r.get("current.package", "") or ""), axis=1
     )
     ALL_APPS = sorted(set(p for p in pkgs if p and p != "nan"))
+
+# Global app color map — ensures same app always gets same color across all tabs
+_APP_PALETTE = px.colors.qualitative.Plotly + px.colors.qualitative.Set2 + px.colors.qualitative.Pastel
+APP_COLOR_MAP = {pkg: _APP_PALETTE[i % len(_APP_PALETTE)] for i, pkg in enumerate(ALL_APPS)}
 
 ALL_DISPLAYS = sorted(
     set(
@@ -577,7 +594,8 @@ def _apply_theme(fig, height=400):
         plot_bgcolor="#fafafa",
         font_color="#111111",
         height=height,
-        margin=dict(l=50, r=30, t=50, b=40),
+        margin=dict(l=50, r=30, t=80, b=40),
+        legend=LEGEND_STYLE,
     )
     return fig
 
@@ -830,9 +848,6 @@ def _build_timeline_tab(events, dfs, displays, zoom_range=None):
         df_focus = df_focus.sort_values("datetime").reset_index(drop=True)
         active_displays = sorted(d for d in df_focus["display_id"].unique() if d in displays)
         display_labels = [DISPLAY_NAMES.get(d, f"D{d}") for d in active_displays]
-        all_pkgs = sorted(set(_short_name(str(p)) for p in df_focus["current_pkg"] if p and str(p) != "nan"))
-        app_palette = px.colors.qualitative.Plotly + px.colors.qualitative.Set2 + px.colors.qualitative.Pastel
-        app_color_map = {pkg: app_palette[i % len(app_palette)] for i, pkg in enumerate(all_pkgs)}
 
         fig_app = go.Figure()
         legend_added = set()
@@ -852,7 +867,7 @@ def _build_timeline_tab(events, dfs, displays, zoom_range=None):
                     end = _clamp_to_active(start, _session_end_for(start))
                 dur_s = (end - start).total_seconds()
                 if 0 < dur_s < 86400:
-                    color = app_color_map.get(pkg, "#888")
+                    color = APP_COLOR_MAP.get(pkg, "#888")
                     fig_app.add_shape(
                         type="rect", x0=start, x1=end,
                         y0=idx - 0.4, y1=idx + 0.4,
@@ -882,7 +897,6 @@ def _build_timeline_tab(events, dfs, displays, zoom_range=None):
             ),
             xaxis=dict(type="date", range=[x_min, x_max]),
             height=80 * n_disp + 120,
-            legend=dict(orientation="h", y=1.0, yanchor="bottom", x=0, font=dict(size=9)),
         )
         children.append(_full(_timeline_graph(fig_app, 80 * n_disp + 120, zoom_range)))
 
@@ -911,7 +925,6 @@ def _build_timeline_tab(events, dfs, displays, zoom_range=None):
             fig_touch.update_layout(
                 title="Touch Rate (per min)", yaxis_title="Touches/min",
                 barmode="overlay", height=250,
-                legend=dict(orientation="h", y=1.0, yanchor="bottom", x=0, font=dict(size=9)),
                 xaxis=dict(range=[x_min, x_max]),
             )
             children.append(_full(_timeline_graph(fig_touch, 250, zoom_range)))
@@ -928,7 +941,6 @@ def _build_timeline_tab(events, dfs, displays, zoom_range=None):
             ))
             fig_dropped.update_layout(
                 title="Dropped Frames", yaxis_title="Frames", height=250,
-                legend=dict(orientation="h", y=1.0, yanchor="bottom", x=0, font=dict(size=9)),
                 xaxis=dict(range=[x_min, x_max]),
             )
             children.append(_full(_timeline_graph(fig_dropped, 250, zoom_range)))
@@ -964,7 +976,6 @@ def _build_timeline_tab(events, dfs, displays, zoom_range=None):
                 ))
             fig_mem.update_layout(
                 title="Available Memory", yaxis_title="GB", height=250,
-                legend=dict(orientation="h", y=1.0, yanchor="bottom", x=0, font=dict(size=9)),
                 xaxis=dict(range=[x_min, x_max]),
             )
             children.append(_full(_timeline_graph(fig_mem, 250, zoom_range)))
@@ -1029,7 +1040,6 @@ def _build_timeline_tab(events, dfs, displays, zoom_range=None):
                 fig_net.update_layout(
                     title="Network Traffic per App (MB per 60s)",
                     yaxis_title="MB", barmode="stack", height=300,
-                    legend=dict(orientation="h", y=1.0, yanchor="bottom", x=0, font=dict(size=9)),
                     xaxis=dict(range=[x_min, x_max]),
                 )
                 children.append(_full(_timeline_graph(fig_net, 300, zoom_range)))
@@ -1308,9 +1318,6 @@ def _build_app_usage_tab(dfs, displays, apps, zoom_range=None):
                        xaxis={"categoryorder": "total descending"}, yaxis_title="Seconds")
 
     # Timeline Gantt — one row per display, same color per app
-    all_pkgs = sorted(set(_short_name(str(p)) for p in df_physical["current_pkg"] if p and str(p) != "nan"))
-    app_palette = px.colors.qualitative.Plotly + px.colors.qualitative.Set2 + px.colors.qualitative.Pastel
-    app_color_map = {pkg: app_palette[i % len(app_palette)] for i, pkg in enumerate(all_pkgs)}
     active_displays = sorted(d for d in df_physical["display_id"].unique() if d < 10)
     n_disp = max(len(active_displays), 1)
     display_labels = [DISPLAY_NAMES.get(d, f"Display {d}") for d in active_displays]
@@ -1334,7 +1341,7 @@ def _build_app_usage_tab(dfs, displays, apps, zoom_range=None):
                 end = _clamp_to_active(start, _session_end_for(start))
             dur_s = (end - start).total_seconds()
             if 0 < dur_s < 86400:
-                color = app_color_map.get(short, "#888")
+                color = APP_COLOR_MAP.get(short, "#888")
                 fig3.add_shape(
                     type="rect", x0=start, x1=end,
                     y0=y_val - 0.4, y1=y_val + 0.4,
@@ -1365,8 +1372,7 @@ def _build_app_usage_tab(dfs, displays, apps, zoom_range=None):
             range=[-0.5, len(display_labels) - 0.5],
         ),
         xaxis=dict(type="date"),
-        legend=dict(orientation="h", y=-0.15, x=0, font=dict(size=10)),
-        margin=dict(l=120, r=30, t=50, b=60),
+        margin=dict(l=120, r=30, t=80, b=60),
     )
 
     children.append(_row(_graph(fig1, 400), _graph(fig2, 400)))
@@ -1554,7 +1560,7 @@ def _build_touch_tab(dfs, displays, zoom_range=None):
                 title=f"Touch Heatmap — {name} (n={n})",
                 xaxis=dict(range=[0, res[0]], showgrid=False, constrain="domain"),
                 yaxis=dict(range=[res[1], 0], showgrid=False, scaleanchor="x", constrain="domain"),
-                margin=dict(l=60, r=60, t=50, b=30),
+                margin=dict(l=60, r=60, t=80, b=30),
             )
             fig_h = max(400, int(res[1] / res[0] * 1400) + 80)
             children.append(_full(_graph(fig, fig_h)))
@@ -1778,12 +1784,10 @@ def _build_network_tab(dfs, apps, zoom_range=None):
             fig_apn.update_layout(title="Traffic by APN (Cumulative MB)", yaxis_title="MB")
 
             # Transport type traffic over time
-            transport_colors = {"ethernet": "#f39c12", "wifi": "#0f9b8e", "other": "#888",
-                                "mobile": "#e74c3c", "bluetooth": "#5b8def"}
             transport_totals = df_apn_data.groupby(["datetime", "networkType"])[["rx", "tx"]].sum().reset_index()
             for nt in sorted(transport_totals["networkType"].unique()):
                 nt_df = transport_totals[transport_totals["networkType"] == nt].sort_values("datetime")
-                color = transport_colors.get(nt, "#888")
+                color = TRANSPORT_COLORS.get(nt, "#888")
                 fig_transport.add_trace(go.Scatter(
                     x=nt_df["datetime"], y=nt_df["rx"].cumsum() / (1024 * 1024),
                     mode="lines", name=f"{nt} RX",
@@ -2319,8 +2323,7 @@ def _build_display_power_tab(dfs, zoom_range=None):
                 range=[-0.5, len(displays_found) - 0.5],
             ),
             xaxis=dict(type="date"),
-            legend=dict(orientation="h", y=-0.15, x=0),
-            margin=dict(l=100, r=30, t=50, b=60),
+            margin=dict(l=100, r=30, t=80, b=60),
         )
         children.append(_full(_synced_graph(fig_disp, 100 * len(displays_found) + 80, zoom_range)))
 
