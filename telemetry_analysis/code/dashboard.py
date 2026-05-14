@@ -279,6 +279,36 @@ ALL_TRIGGERS = sorted(set(
     if e.get("payload", {}).get("trigger")
 ))
 
+# Extract all APNs and network transport types from Network_PerAppTraffic
+_df_perapp_global = DFS.get("Network_PerAppTraffic", pd.DataFrame())
+ALL_APNS: list[str] = []
+ALL_TRANSPORTS: list[str] = []
+if not _df_perapp_global.empty and "apps" in _df_perapp_global.columns:
+    _apn_set: set[str] = set()
+    _transport_set: set[str] = set()
+    for _, _row in _df_perapp_global.iterrows():
+        _apps_data = _row.get("apps", [])
+        _schema = _row.get("schema")
+        for _a in _apps_data:
+            if isinstance(_a, list) and _schema:
+                _rec = dict(zip(_schema, _a))
+            elif isinstance(_a, dict):
+                _rec = _a
+            else:
+                continue
+            _apn_set.add(_rec.get("apn", "unknown"))
+            _transport_set.add(_rec.get("networkType", "unknown"))
+    ALL_APNS = sorted(_apn_set)
+    ALL_TRANSPORTS = sorted(_transport_set)
+
+# Extract all navigation focus owners
+_df_nav_global = DFS.get("Navigation_FocusChanged", pd.DataFrame())
+ALL_NAV_OWNERS: list[str] = []
+if not _df_nav_global.empty and "currentOwner" in _df_nav_global.columns:
+    ALL_NAV_OWNERS = sorted(
+        str(x) for x in _df_nav_global["currentOwner"].dropna().unique() if str(x) != "nan"
+    )
+
 # Compute session time ranges for the session indicator bar
 _session_events = defaultdict(list)
 for _e in RAW_EVENTS:
@@ -513,6 +543,46 @@ app.layout = html.Div(
                                 style={"minWidth": "150px"},
                             ),
                         ]),
+                        html.Div([
+                            html.Label("APN", style={"fontSize": "11px", "color": PDS_CONTRAST_LOW,
+                                                      "display": "block", "marginBottom": "4px"}),
+                            dcc.Dropdown(
+                                id="apn-filter",
+                                options=[{"label": a, "value": a} for a in ALL_APNS],
+                                value=[], multi=True, placeholder="All APNs",
+                                style={"minWidth": "150px"},
+                            ),
+                        ]),
+                        html.Div([
+                            html.Label("Transport", style={"fontSize": "11px", "color": PDS_CONTRAST_LOW,
+                                                            "display": "block", "marginBottom": "4px"}),
+                            dcc.Dropdown(
+                                id="transport-filter",
+                                options=[{"label": t, "value": t} for t in ALL_TRANSPORTS],
+                                value=[], multi=True, placeholder="All transports",
+                                style={"minWidth": "150px"},
+                            ),
+                        ]),
+                        html.Div([
+                            html.Label("Nav Focus", style={"fontSize": "11px", "color": PDS_CONTRAST_LOW,
+                                                            "display": "block", "marginBottom": "4px"}),
+                            dcc.Dropdown(
+                                id="nav-focus-filter",
+                                options=[{"label": _short_name(o), "value": o} for o in ALL_NAV_OWNERS],
+                                value=[], multi=True, placeholder="All nav owners",
+                                style={"minWidth": "150px"},
+                            ),
+                        ]),
+                        html.Div([
+                            html.Label("Foreground App", style={"fontSize": "11px", "color": PDS_CONTRAST_LOW,
+                                                                 "display": "block", "marginBottom": "4px"}),
+                            dcc.Dropdown(
+                                id="foreground-filter",
+                                options=[{"label": _short_name(a), "value": a} for a in ALL_APPS],
+                                value=[], multi=True, placeholder="All apps",
+                                style={"minWidth": "180px"},
+                            ),
+                        ]),
                     ],
                 ),
             ],
@@ -654,6 +724,46 @@ def _full(*children):
 
 
 # ---------------------------------------------------------------------------
+# Filter helpers
+# ---------------------------------------------------------------------------
+
+
+def _compute_focus_periods(df, column, selected_values):
+    """Compute time periods (as (start_ts, end_ts) tuples) where column had one of selected_values.
+
+    Uses the state-change pattern: an entry is active from its timestamp until the next entry
+    in the same dataframe.
+    """
+    periods = []
+    df_sorted = df.sort_values("timestamp").reset_index(drop=True)
+    for i, row in df_sorted.iterrows():
+        val = str(row.get(column, ""))
+        ts = row.get("timestamp")
+        if val in selected_values:
+            # Find end: next event in the dataframe
+            if i + 1 < len(df_sorted):
+                end_ts = df_sorted.iloc[i + 1]["timestamp"]
+            else:
+                end_ts = MAX_TS
+            periods.append((ts, end_ts))
+    return periods
+
+
+def _filter_events_by_periods(events, periods):
+    """Keep only events whose timestamp falls within any of the given (start, end) periods."""
+    if not periods:
+        return events
+    filtered = []
+    for e in events:
+        ts = e.get("timestamp", 0)
+        for p_start, p_end in periods:
+            if p_start <= ts <= p_end:
+                filtered.append(e)
+                break
+    return filtered
+
+
+# ---------------------------------------------------------------------------
 # Callbacks
 # ---------------------------------------------------------------------------
 
@@ -666,10 +776,15 @@ def _full(*children):
     Input("display-filter", "value"),
     Input("app-filter", "value"),
     Input("trigger-filter", "value"),
+    Input("apn-filter", "value"),
+    Input("transport-filter", "value"),
+    Input("nav-focus-filter", "value"),
+    Input("foreground-filter", "value"),
     Input("section-tabs", "value"),
     Input("graph-zoom", "data"),
 )
-def update_dashboard(relayout_data, displays, apps, triggers, active_tab, zoom_data):
+def update_dashboard(relayout_data, displays, apps, triggers, apn_filter, transport_filter,
+                     nav_focus_filter, foreground_filter, active_tab, zoom_data):
     # Determine time range from the rangeslider
     start_ts, end_ts = MIN_TS, MAX_TS
     if relayout_data:
@@ -701,11 +816,62 @@ def update_dashboard(relayout_data, displays, apps, triggers, active_tab, zoom_d
     displays = displays or ALL_DISPLAYS
     apps = apps or []
     triggers = triggers or []
+    apn_filter = apn_filter or []
+    transport_filter = transport_filter or []
+    nav_focus_filter = nav_focus_filter or []
+    foreground_filter = foreground_filter or []
 
     # Apply trigger filter
     if triggers:
         events = [e for e in events if e.get("payload", {}).get("trigger", "") in triggers]
         dfs = normalize(events)
+
+    # Apply APN/Transport filter: restrict to timestamps where selected APN/transport had traffic
+    if apn_filter or transport_filter:
+        df_traffic = dfs.get("Network_PerAppTraffic", pd.DataFrame())
+        if not df_traffic.empty and "apps" in df_traffic.columns:
+            valid_ts = set()
+            for _, row in df_traffic.iterrows():
+                apps_data = row.get("apps", [])
+                schema = row.get("schema")
+                ts = row.get("timestamp")
+                for a in apps_data:
+                    if isinstance(a, list) and schema:
+                        rec = dict(zip(schema, a))
+                    elif isinstance(a, dict):
+                        rec = a
+                    else:
+                        continue
+                    apn_ok = (not apn_filter) or rec.get("apn", "unknown") in apn_filter
+                    transport_ok = (not transport_filter) or rec.get("networkType", "unknown") in transport_filter
+                    if apn_ok and transport_ok:
+                        valid_ts.add(ts)
+                        break
+            if valid_ts:
+                # Keep events within ±30s of any valid traffic timestamp
+                valid_ts_sorted = sorted(valid_ts)
+                events = [e for e in events if any(
+                    abs(e.get("timestamp", 0) - vt) < 30000 for vt in valid_ts_sorted
+                )]
+                dfs = normalize(events)
+
+    # Apply nav focus filter: keep only data from periods when selected app had nav focus
+    if nav_focus_filter:
+        df_nav_f = dfs.get("Navigation_FocusChanged", pd.DataFrame())
+        if not df_nav_f.empty and "currentOwner" in df_nav_f.columns:
+            nav_periods = _compute_focus_periods(df_nav_f, "currentOwner", nav_focus_filter)
+            if nav_periods:
+                events = _filter_events_by_periods(events, nav_periods)
+                dfs = normalize(events)
+
+    # Apply foreground app filter: keep only data from periods when selected app was in foreground
+    if foreground_filter:
+        df_fg = dfs.get("App_FocusChanged", pd.DataFrame())
+        if not df_fg.empty and "current.package" in df_fg.columns:
+            fg_periods = _compute_focus_periods(df_fg, "current.package", foreground_filter)
+            if fg_periods:
+                events = _filter_events_by_periods(events, fg_periods)
+                dfs = normalize(events)
 
     # KPI cards
     total_events = len(events)
@@ -749,7 +915,7 @@ def update_dashboard(relayout_data, displays, apps, triggers, active_tab, zoom_d
     elif active_tab == "performance":
         content = _build_performance_tab(dfs, zoom_range)
     elif active_tab == "network":
-        content = _build_network_tab(dfs, apps, zoom_range)
+        content = _build_network_tab(dfs, apps, apn_filter, transport_filter, zoom_range)
     elif active_tab == "vehicle":
         content = _build_vehicle_tab(dfs, zoom_range)
     elif active_tab == "audio_media":
@@ -1668,7 +1834,7 @@ def _build_performance_tab(dfs, zoom_range=None):
     return html.Div(children)
 
 
-def _build_network_tab(dfs, apps, zoom_range=None):
+def _build_network_tab(dfs, apps, apn_filter, transport_filter, zoom_range=None):
     children = []
 
     # Signal strength
@@ -1800,7 +1966,7 @@ def _build_network_tab(dfs, apps, zoom_range=None):
 
     children.append(_row(_synced_graph(fig_apn, 350, zoom_range), _synced_graph(fig_transport, 350, zoom_range)))
 
-    # Per-app traffic with APN + Transport breakdown
+    # Per-app traffic with APN + Transport breakdown (stacked by transport)
     fig_perapp = go.Figure()
     perapp_height = 350
     if not df_perapp.empty and "apps" in df_perapp.columns:
@@ -1828,35 +1994,75 @@ def _build_network_tab(dfs, apps, zoom_range=None):
                 label = pkgs[0] if pkgs else f"uid:{rec.get('uid', 0)}"
                 if apps and label not in apps:
                     continue
+                apn = rec.get("apn", "unknown")
+                net_type = rec.get("networkType", "unknown")
+                # Apply local APN/transport filter for this graph
+                if apn_filter and apn not in apn_filter:
+                    continue
+                if transport_filter and net_type not in transport_filter:
+                    continue
                 app_traffic_rows.append({
-                    "app": label,
-                    "apn": rec.get("apn", "unknown"),
-                    "networkType": rec.get("networkType", "unknown"),
+                    "app": _short_name(label),
+                    "transport": f"{apn}/{net_type}",
                     "rx": rec.get("rxBytes", 0),
                     "tx": rec.get("txBytes", 0),
                 })
 
         if app_traffic_rows:
             df_at = pd.DataFrame(app_traffic_rows)
-            # Show per-app, broken down by APN + networkType
-            df_at["key"] = df_at["app"] + " [" + df_at["apn"] + "/" + df_at["networkType"] + "]"
-            app_sums = df_at.groupby("key")[["rx", "tx"]].sum()
+            # Sum per app + transport combo
+            app_transport_sums = df_at.groupby(["app", "transport"])[["rx", "tx"]].sum().reset_index()
+            app_transport_sums["rx_mb"] = app_transport_sums["rx"] / (1024 * 1024)
+            app_transport_sums["tx_mb"] = app_transport_sums["tx"] / (1024 * 1024)
+            # Filter out tiny entries
+            app_transport_sums = app_transport_sums[
+                (app_transport_sums["rx_mb"] + app_transport_sums["tx_mb"]) > 0.001
+            ]
 
-            traffic_data = []
-            for label in app_sums.index:
-                rx_mb = app_sums.loc[label, "rx"] / (1024 * 1024)
-                tx_mb = app_sums.loc[label, "tx"] / (1024 * 1024)
-                if rx_mb + tx_mb > 0.001:
-                    traffic_data.append({"App": label, "RX (MB)": rx_mb, "TX (MB)": tx_mb})
-            if traffic_data:
-                df_t = pd.DataFrame(traffic_data).sort_values("RX (MB)", ascending=True)
-                fig_perapp.add_trace(go.Bar(y=df_t["App"], x=df_t["RX (MB)"], name="RX",
-                                            orientation="h", marker_color="#0f9b8e"))
-                fig_perapp.add_trace(go.Bar(y=df_t["App"], x=df_t["TX (MB)"], name="TX",
-                                            orientation="h", marker_color="#5b8def"))
-                fig_perapp.update_layout(title="Per-App Traffic by APN/Transport (MB)", barmode="group",
-                                         height=max(300, len(df_t) * 35), xaxis_title="MB")
-                perapp_height = max(350, len(df_t) * 35 + 80)
+            if not app_transport_sums.empty:
+                # Sort apps by total traffic
+                app_totals = app_transport_sums.groupby("app")[["rx_mb", "tx_mb"]].sum()
+                app_totals["total"] = app_totals["rx_mb"] + app_totals["tx_mb"]
+                app_order = app_totals.sort_values("total", ascending=True).index.tolist()
+
+                # Color palette for transport types
+                transport_palette = ["#0f9b8e", "#5b8def", "#e74c3c", "#f39c12", "#9b59b6", "#2ecc71", "#888"]
+                all_transports = sorted(app_transport_sums["transport"].unique())
+                transport_colors = {t: transport_palette[i % len(transport_palette)]
+                                    for i, t in enumerate(all_transports)}
+
+                # Add stacked bars: RX traces per transport
+                for transport in all_transports:
+                    t_data = app_transport_sums[app_transport_sums["transport"] == transport]
+                    # Create a series aligned to app_order
+                    rx_vals = []
+                    tx_vals = []
+                    for app in app_order:
+                        match = t_data[t_data["app"] == app]
+                        rx_vals.append(match["rx_mb"].iloc[0] if not match.empty else 0)
+                        tx_vals.append(match["tx_mb"].iloc[0] if not match.empty else 0)
+
+                    color = transport_colors[transport]
+                    fig_perapp.add_trace(go.Bar(
+                        y=app_order, x=rx_vals, name=f"{transport}",
+                        orientation="h", marker_color=color,
+                        legendgroup=transport, offsetgroup="rx",
+                    ))
+                    fig_perapp.add_trace(go.Bar(
+                        y=app_order, x=tx_vals, name=f"{transport}",
+                        orientation="h", marker_color=color, opacity=0.6,
+                        legendgroup=transport, offsetgroup="tx",
+                        showlegend=False,
+                    ))
+
+                n_apps = len(app_order)
+                fig_perapp.update_layout(
+                    title="Per-App Traffic by APN/Transport (MB) — solid=RX, faded=TX",
+                    barmode="stack", height=max(300, n_apps * 45 + 100),
+                    xaxis_title="MB",
+                    yaxis=dict(categoryorder="array", categoryarray=app_order),
+                )
+                perapp_height = max(350, n_apps * 45 + 120)
 
     children.append(_full(_graph(fig_perapp, perapp_height)))
 

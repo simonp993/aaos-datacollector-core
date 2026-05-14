@@ -7,8 +7,9 @@ Last updated: 2026-05-11
 
 
 ## Features
-- make sure the suspend to ram is displayed nicely. Also make sure to count how often it goes into suspend to ram before doing full shut down, is it always 7? 
-- make sure that the network traffic is seperated better (apn, transport)
+- Test all the filters. Nav focus is missing None
+- make sure the Display & Power, as well as RAM, CPU, etc. Usage is displayed in a meaningful way. Also make sure that suspend to RAM and shutoffs, boots are shown in a meaningful way. Is it always 7? 
+- More hight between title, legend and graph (add to .md as well)
 
 - Add System_ Analytics
 - Add Analytics for if displays are on, off, standby as sepete graph or to app lifecycle
